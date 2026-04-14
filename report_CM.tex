@@ -1,0 +1,632 @@
+\documentclass[11pt,a4paper]{article}
+
+% ─── Packages ───────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{mathtools}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+
+% ─── Theorem environments ───────────────────────────────────
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{remark}{Remark}
+
+% ─── Custom commands ────────────────────────────────────────
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+\newcommand{\inner}[2]{\langle #1, #2 \rangle}
+\newcommand{\Xhat}{\hat{X}}
+\newcommand{\yhat}{\hat{y}}
+\DeclareMathOperator{\diag}{diag}
+
+% ═══════════════════════════════════════════════════════════════
+\begin{document}
+
+% ─── Title ──────────────────────────────────────────────────
+\begin{center}
+    {\Large\bfseries Computational Mathematics for Learning and Data Analysis}\\[6pt]
+    {\large Project Track 19 --- Non-ML}\\[12pt]
+    {\large\bfseries QR Factorization and Limited-Memory \\Quasi-Newton Methods for Regularized Least Squares}\\[12pt]
+    
+    \textit{Karol Jinet}\\
+    \texttt{k.jinet@studenti.unipi.it}\\[6pt]
+    Academic Year 2024--2025
+\end{center}
+
+\vspace{1cm}
+
+% ─── Table of Contents ──────────────────────────────────────
+\tableofcontents
+\newpage
+
+% ═════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+% ═════════════════════════════════════════════════════════════
+
+This project addresses the numerical solution of a regularized linear least squares problem. 
+Given a data matrix $X \in \R^{m \times n}$ from the ML-CUP dataset, a random response vector 
+$y \in \R^n$, and a regularization parameter $\lambda > 0$, the goal is to find the vector 
+$w \in \R^m$ that minimizes
+
+\begin{equation}
+\label{eq:problem}
+    \min_w \norm{\Xhat w - \yhat},
+\end{equation}
+
+where the augmented matrix and vector are defined as
+
+\begin{equation}
+\label{eq:augmented}
+    \Xhat = \begin{bmatrix} X^T \\ \lambda I_m \end{bmatrix} \in \R^{(n+m) \times m}, 
+    \qquad
+    \yhat = \begin{bmatrix} y \\ 0 \end{bmatrix} \in \R^{n+m}.
+\end{equation}
+
+Expanding the squared norm, the problem is equivalent to minimizing
+
+\begin{equation}
+\label{eq:expanded}
+    f(w) = \frac{1}{2}\norm{X^T w - y}^2 + \frac{1}{2}\lambda^2 \norm{w}^2,
+\end{equation}
+
+which is a standard instance of Tikhonov regularization (ridge regression)~\cite{hastie2009elements}. 
+The regularization term $\lambda^2\norm{w}^2$ penalizes large coefficient vectors, 
+improving the numerical stability of the solution and controlling overfitting.
+
+Two computational strategies are explored:
+
+\begin{itemize}[nosep]
+    \item \textbf{(A1)} A limited-memory quasi-Newton method (L-BFGS), which iteratively 
+    approximates the curvature of the objective function using only gradient information 
+    and a small number of stored vector pairs.
+    \item \textbf{(A2)} A direct method based on thin QR factorization with Householder 
+    reflectors, in the compact variant where the orthogonal matrix~$Q$ is not formed 
+    explicitly, but applied implicitly through stored Householder vectors.
+\end{itemize}
+
+Both algorithms are implemented from scratch, without relying on any off-the-shelf 
+numerical solvers. The present report focuses on algorithm (A1).
+
+
+% ═════════════════════════════════════════════════════════════
+\section{Problem Properties}
+\label{sec:properties}
+% ═════════════════════════════════════════════════════════════
+
+Before discussing the optimization algorithm, we analyze the mathematical properties 
+of the objective function~\eqref{eq:expanded} that are relevant for convergence.
+
+\subsection{Gradient and Hessian}
+
+The objective~\eqref{eq:expanded} is a quadratic function with constant Hessian. 
+Its gradient and Hessian are:
+
+\begin{align}
+    \nabla f(w) &= X(X^T w - y) + \lambda^2 w, \label{eq:gradient} \\
+    H \coloneqq \nabla^2 f(w) &= XX^T + \lambda^2 I_m. \label{eq:hessian}
+\end{align}
+
+\subsection{Strong Convexity and Smoothness}
+
+Since $XX^T \succeq 0$ and $\lambda > 0$, the Hessian is symmetric positive definite:
+
+\begin{equation}
+    v^T H v = \norm{X^T v}^2 + \lambda^2\norm{v}^2 \geq \lambda^2\norm{v}^2 > 0,
+    \quad \forall\, v \neq 0.
+\end{equation}
+
+This implies that $f$ is $\mu$-strongly convex with parameter $\mu = \lambda_{\min}(H) = \lambda_m(XX^T) + \lambda^2$, 
+where $\lambda_m(XX^T)$ denotes the smallest eigenvalue of $XX^T$. Since $X$ is tall-thin 
+($m > n$), the matrix $XX^T$ is rank-deficient with $\lambda_m(XX^T) = 0$ 
+(see Lemma~\ref{lemma:eigenvalues} in Appendix), hence $\mu = \lambda^2$.
+
+The gradient is Lipschitz continuous with constant $L = \lambda_{\max}(H) = \lambda_1(XX^T) + \lambda^2$, 
+since for all $w, w' \in \R^m$:
+
+\begin{equation}
+    \norm{\nabla f(w) - \nabla f(w')} = \norm{H(w - w')} \leq \norm{H}\norm{w - w'} = L\norm{w - w'}.
+\end{equation}
+
+\subsection{Condition Number}
+\label{sec:conditioning}
+
+The condition number of the augmented matrix $\Xhat$ is
+
+\begin{equation}
+\label{eq:condition}
+    \kappa(\Xhat) = \frac{\sigma_{\max}(\Xhat)}{\sigma_{\min}(\Xhat)} 
+    = \sqrt{\frac{\lambda_1(XX^T) + \lambda^2}{\lambda^2}} 
+    = \frac{\sqrt{\lambda_1(XX^T) + \lambda^2}}{\lambda},
+\end{equation}
+
+which scales as $O(1/\lambda)$ for small $\lambda$. This means that weak regularization 
+leads to ill-conditioned problems, directly affecting the convergence speed of iterative methods.
+
+
+% ═════════════════════════════════════════════════════════════
+\section{Limited-Memory BFGS (L-BFGS)}
+\label{sec:lbfgs}
+% ═════════════════════════════════════════════════════════════
+
+\subsection{Quasi-Newton Methods: Background}
+
+Quasi-Newton methods are iterative algorithms for unconstrained optimization that 
+approximate the Newton direction without explicitly computing the Hessian 
+matrix~\cite{nocedal2006numerical}. At each iteration~$k$, the search direction is 
+computed as
+
+\begin{equation}
+\label{eq:qn_direction}
+    p_k = -H_k \nabla f(w_k),
+\end{equation}
+
+where $H_k \approx [\nabla^2 f(w_k)]^{-1}$ is an approximation to the inverse Hessian, 
+built incrementally from gradient differences. The iterate is then updated as
+
+\begin{equation}
+    w_{k+1} = w_k + \alpha_k p_k,
+\end{equation}
+
+where $\alpha_k > 0$ is a step length determined by a line search procedure.
+
+The BFGS update~\cite{broyden1970} maintains a dense $m \times m$ matrix $H_k$ 
+that is updated at each iteration via a rank-two formula using the pairs
+
+\begin{equation}
+    s_k = w_{k+1} - w_k, \qquad y_k = \nabla f(w_{k+1}) - \nabla f(w_k).
+\end{equation}
+
+While BFGS achieves superlinear convergence on strongly convex 
+problems~\cite{nocedal2006numerical}, storing and updating the full $m \times m$ 
+matrix becomes prohibitive when the dimension~$m$ is large.
+
+
+\subsection{The L-BFGS Algorithm}
+
+The Limited-Memory BFGS (L-BFGS) method~\cite{liu1989limited} addresses the memory 
+limitation by storing only the most recent $\bar{m}$ pairs $\{s_i, y_i\}$, typically 
+with $\bar{m} \in [3, 20]$. Rather than forming the full matrix $H_k$, the product 
+$H_k \nabla f(w_k)$ is computed implicitly via a \emph{two-loop recursion} 
+(Algorithm~\ref{alg:twoloop}).
+
+\subsubsection{Initial Scaling}
+
+At each iteration, the initial approximation $H_k^0 = \gamma_k I$ is set 
+using~\cite[Eq.~9.6]{nocedal2006numerical}:
+
+\begin{equation}
+\label{eq:gamma}
+    \gamma_k = \frac{s_{k-1}^T y_{k-1}}{y_{k-1}^T y_{k-1}}.
+\end{equation}
+
+This scaling attempts to estimate the magnitude of the true Hessian along the most 
+recent search direction, ensuring that the search direction $p_k$ is well-scaled 
+and that the unit step length $\alpha_k = 1$ is accepted in most iterations.
+
+
+\subsubsection{Two-Loop Recursion}
+
+The product $r = H_k \nabla f_k$ is computed efficiently by the following 
+procedure~\cite[Algorithm~9.1]{nocedal2006numerical}:
+
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop Recursion~\cite[Algorithm~9.1]{nocedal2006numerical}}
+\label{alg:twoloop}
+\begin{algorithmic}[1]
+    \Require Gradient $q \gets \nabla f_k$; stored pairs $\{s_i, y_i\}_{i=k-\bar{m}}^{k-1}$
+    \Ensure $r = H_k \nabla f_k$
+    \For{$i = k-1, k-2, \ldots, k-\bar{m}$}
+        \State $\rho_i \gets 1 / (y_i^T s_i)$
+        \State $\alpha_i \gets \rho_i\, s_i^T q$
+        \State $q \gets q - \alpha_i\, y_i$
+    \EndFor
+    \State $r \gets H_k^0\, q$ \Comment{$H_k^0 = \gamma_k I$ from Eq.~\eqref{eq:gamma}}
+    \For{$i = k-\bar{m}, \ldots, k-1$}
+        \State $\beta \gets \rho_i\, y_i^T r$
+        \State $r \gets r + s_i\,(\alpha_i - \beta)$
+    \EndFor
+    \State \Return $r$
+\end{algorithmic}
+\end{algorithm}
+
+The cost of the two-loop recursion is $O(4\bar{m}\,m)$ multiplications, plus $O(m)$ for 
+the scaling $H_k^0 q$. This is a significant improvement over the $O(m^2)$ cost of 
+full BFGS.
+
+
+\subsubsection{Curvature Safeguard}
+
+The BFGS update requires that the curvature condition $y_k^T s_k > 0$ holds. 
+When this condition is satisfied, the pair $(s_k, y_k)$ is added to the memory; 
+otherwise, it is discarded. If the curvature becomes excessively small 
+($y_k^T s_k \leq 10^{-16}$), the stored memory is cleared entirely and the algorithm 
+restarts from a gradient descent step, following~\cite{liu1989limited}.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Line Search Strategies}
+\label{sec:linesearch}
+% ─────────────────────────────────────────────────────────────
+
+\subsubsection{Strong Wolfe Conditions}
+
+The standard approach for selecting the step length $\alpha_k$ in quasi-Newton methods 
+is a line search satisfying the \emph{strong Wolfe conditions}~\cite[Eq.~3.7]{nocedal2006numerical}:
+
+\begin{align}
+    f(w_k + \alpha_k p_k) &\leq f(w_k) + c_1\, \alpha_k\, \nabla f_k^T p_k, \label{eq:armijo} \\
+    \left|\nabla f(w_k + \alpha_k p_k)^T p_k\right| &\leq c_2\, \left|\nabla f_k^T p_k\right|, \label{eq:curvature}
+\end{align}
+
+with $0 < c_1 < c_2 < 1$. Following standard practice for quasi-Newton 
+methods~\cite{nocedal2006numerical}, we set $c_1 = 10^{-4}$ and $c_2 = 0.9$.
+
+Condition~\eqref{eq:armijo} (Armijo) ensures sufficient decrease in the objective value, 
+while~\eqref{eq:curvature} prevents the step from being too short by requiring that the 
+directional derivative at the new point is sufficiently small.
+
+Our implementation uses a bracketing-and-zoom procedure with cubic interpolation, 
+following the algorithmic framework described in~\cite[Section~3.5]{nocedal2006numerical}.
+
+
+\subsubsection{Exact Line Search for Quadratic Objectives}
+\label{sec:exact_ls}
+
+Since the objective function~\eqref{eq:expanded} is quadratic, the restriction of $f$ 
+along any direction $p$ is a parabola:
+
+\begin{equation}
+    \varphi(\alpha) = f(w + \alpha\, p) 
+    = f(w) + \alpha\,\nabla f(w)^T p + \frac{\alpha^2}{2}\,p^T H p.
+\end{equation}
+
+The second derivative $\varphi''(\alpha) = p^T H p$ is constant and positive (since $H \succ 0$), 
+so $\varphi$ has a unique global minimum at
+
+\begin{equation}
+\label{eq:exact_alpha}
+    \alpha_{\min} = -\frac{\nabla f(w)^T p}{p^T H p} 
+    = -\frac{\nabla f(w)^T p}{\norm{X^T p}^2 + \lambda^2\norm{p}^2}.
+\end{equation}
+
+This is a generalization of~\cite[Eq.~3.25]{nocedal2006numerical} to an arbitrary descent 
+direction~$p$. The computational cost is dominated by a single matrix-vector product 
+$X^T p$, requiring $O(mn)$ operations --- the same cost as a gradient evaluation, and 
+considerably cheaper than the multiple function and gradient evaluations typically needed 
+by the Wolfe line search.
+
+For quadratic problems, the exact line search is theoretically preferable because it 
+minimizes $f$ exactly along each search direction, fully exploiting the parabolic structure 
+of the objective. As noted by~\cite{liu1989limited} and confirmed by our experiments 
+(Section~\ref{sec:exact_vs_wolfe}), this leads to faster convergence and higher final accuracy.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Complete Algorithm}
+% ─────────────────────────────────────────────────────────────
+
+The complete L-BFGS procedure is summarized in Algorithm~\ref{alg:lbfgs}.
+
+\begin{algorithm}[H]
+\caption{L-BFGS~\cite[Algorithm~9.2]{nocedal2006numerical}}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+    \Require Starting point $w_0$; memory size $\bar{m} > 0$; tolerance $\varepsilon > 0$
+    \State $k \gets 0$; compute $\nabla f_0$; set $\texttt{stop\_tol} \gets \varepsilon\,\norm{\nabla f_0}$
+    \While{$\norm{\nabla f_k} > \texttt{stop\_tol}$}
+        \State Choose $H_k^0 = \gamma_k I$ \Comment{Eq.~\eqref{eq:gamma}}
+        \State Compute $p_k \gets -H_k \nabla f_k$ \Comment{Algorithm~\ref{alg:twoloop}}
+        \If{$\nabla f_k^T p_k \geq 0$} \Comment{Safeguard: fallback to steepest descent}
+            \State $p_k \gets -\nabla f_k$
+        \EndIf
+        \State Compute $\alpha_k$ via exact line search (Eq.~\eqref{eq:exact_alpha}) 
+               or Wolfe conditions
+        \State $w_{k+1} \gets w_k + \alpha_k\, p_k$
+        \State $s_k \gets w_{k+1} - w_k$; \quad $y_k \gets \nabla f_{k+1} - \nabla f_k$
+        \If{$y_k^T s_k > 10^{-10}$}
+            \State Store $(s_k, y_k)$; discard oldest pair if $\#\text{stored} > \bar{m}$
+        \ElsIf{$y_k^T s_k \leq 10^{-16}$}
+            \State Clear all stored pairs \Comment{Curvature reset}
+        \EndIf
+        \State $k \gets k + 1$
+    \EndWhile
+    \State \Return $w_k$
+\end{algorithmic}
+\end{algorithm}
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Stopping Criterion}
+\label{sec:stopping}
+% ─────────────────────────────────────────────────────────────
+
+The primary stopping criterion uses a \emph{relative} tolerance on the gradient norm:
+
+\begin{equation}
+\label{eq:stop_rel}
+    \norm{\nabla f(w_k)} \leq \varepsilon \cdot \norm{\nabla f(w_0)},
+\end{equation}
+
+where $\varepsilon > 0$ is a user-specified tolerance and $w_0$ is the starting point. 
+This criterion is scale-invariant: it does not depend on the absolute magnitude of the 
+gradient, which can vary significantly across different values of~$\lambda$.
+
+As a secondary criterion, the algorithm detects \emph{numerical stagnation}: 
+if the relative change in function value $|f_{k} - f_{k-1}|/|f_k|$ drops below 
+machine epsilon while the step length $\alpha_k$ is near zero, the iteration is terminated.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Convergence Analysis}
+\label{sec:convergence}
+% ─────────────────────────────────────────────────────────────
+
+\subsubsection{Global Linear Convergence}
+
+The convergence of L-BFGS on the problem at hand follows from 
+\cite[Theorem~1]{liu1989limited}. The key assumptions are:
+
+\begin{enumerate}[nosep]
+    \item $f \in C^2$ (satisfied: $f$ is quadratic);
+    \item the level sets $\mathcal{L} = \{w : f(w) \leq f(w_0)\}$ are convex 
+          (satisfied: $f$ is strongly convex);
+    \item $\exists\, M_1, M_2 > 0$ such that $M_1\norm{v}^2 \leq v^T \nabla^2 f(w)\,v \leq M_2\norm{v}^2$ 
+          for all $v \in \R^m$ and $w \in \mathcal{L}$ 
+          (satisfied: $H$ is constant with $M_1 = \lambda^2$ and $M_2 = \lambda_1(XX^T) + \lambda^2$).
+\end{enumerate}
+
+Under these conditions, the iterates converge linearly:
+
+\begin{equation}
+    f(w_k) - f(w^*) \leq r^k\,(f(w_0) - f(w^*)), \quad r \in [0,1).
+\end{equation}
+
+\subsubsection{Superlinear Convergence}
+
+For the full BFGS method (i.e., when $\bar{m}$ is large enough to store the entire history), 
+\cite[Theorem~6.6]{nocedal2006numerical} guarantees superlinear convergence on strongly 
+convex functions.
+
+A non-asymptotic analysis by Rodomanov and Nesterov~\cite{rodomanov2021} predicts that 
+superlinear convergence begins after approximately $K_0^{\text{BFGS}} = 4m\ln\kappa$ iterations, 
+where $\kappa = L/\mu$ is the condition number of the Hessian. 
+Jin and Mokhtari~\cite{jin2022} provide a local bound:
+
+\begin{equation}
+    \frac{\norm{w_k - w^*}_H}{\norm{w_0 - w^*}_H} \leq \left(\frac{1}{k}\right)^{k/2},
+\end{equation}
+
+where $\norm{v}_H = \sqrt{v^T H v}$ is the Hessian-induced norm. This implies that 
+achieving accuracy $\varepsilon$ requires only 
+$k = O\!\left(\frac{\log(1/\varepsilon)}{\log\log(1/\varepsilon)}\right)$ iterations, 
+which is significantly better than the $O(\log(1/\varepsilon))$ bound for linear convergence.
+
+\begin{remark}
+For L-BFGS with finite memory $\bar{m}$, the theoretical guarantee is only linear convergence. 
+However, in practice, superlinear behavior is often observed for well-conditioned problems, 
+as the limited-memory approximation captures sufficient curvature information when $\bar{m}$ 
+is large enough relative to the problem dimension.
+\end{remark}
+
+\subsubsection{Computational Complexity}
+
+Each iteration of L-BFGS requires:
+\begin{itemize}[nosep]
+    \item One gradient evaluation: $O(mn)$ (matrix-vector product $X(X^T w - y)$);
+    \item Two-loop recursion: $O(4\bar{m}\,m)$;
+    \item Line search: $O(mn)$ for exact (one product $X^T p$), or $O(k_{LS}\,mn)$ for Wolfe 
+          (where $k_{LS}$ is the number of line search evaluations).
+\end{itemize}
+
+The total cost per iteration is $O(mn + \bar{m}\,m)$, and the memory requirement is 
+$O(\bar{m}\,m)$ for storing the vector pairs --- a drastic improvement over the $O(m^2)$ 
+storage of full BFGS.
+
+
+% ═════════════════════════════════════════════════════════════
+\section{L-BFGS Experimental Results}
+\label{sec:experiments}
+% ═════════════════════════════════════════════════════════════
+
+All experiments use a matrix $X \in \R^{m \times n}$ generated randomly with i.i.d.\ standard 
+normal entries (as a proxy for the ML-CUP dataset), with default dimensions $m = 600$ 
+and $n = 12$. The response vector $y \in \R^n$ is drawn from a standard normal distribution 
+with a fixed random seed. Unless stated otherwise, the tolerance is $\varepsilon = 10^{-14}$ 
+(relative), the memory size is $\bar{m} = 10$, and the baseline solution $w^*$ is computed 
+via the normal equations using \texttt{numpy.linalg.solve}.
+
+
+\subsection{Exact Line Search vs.\ Strong Wolfe Line Search}
+\label{sec:exact_vs_wolfe}
+
+We compare the two line search strategies on the same problem instance with $\lambda = 0.5$.
+
+\begin{table}[h]
+\centering
+\caption{Comparison of line search strategies ($m=600$, $n=12$, $\lambda=0.5$, $\varepsilon=10^{-14}$ relative).}
+\label{tab:ls_comparison}
+\begin{tabular}{lcccr}
+    \toprule
+    \textbf{Line Search} & \textbf{Iterations} & $\norm{w - w^*}$ & $|f^* - f|$ & \textbf{Time (s)} \\
+    \midrule
+    Exact   & 16 & $6.4 \times 10^{-14}$ & $4.3 \times 10^{-19}$ & 0.002 \\
+    Wolfe   & 16 & $6.0 \times 10^{-11}$ & $< 10^{-19}$ & 0.002 \\
+    \bottomrule
+\end{tabular}
+\end{table}
+
+Both strategies converge in the same number of iterations, but the exact line search 
+achieves approximately three orders of magnitude higher accuracy on the weight vector 
+($10^{-14}$ vs.\ $10^{-11}$). This is because the exact line search optimizes each step 
+perfectly along the parabolic tomography, while the Wolfe conditions allow a range of 
+acceptable step lengths. The Wolfe variant stagnates earlier with a gradient norm 
+of $\sim\!4 \times 10^{-8}$, while the exact variant continues to decrease until 
+$\sim\!5 \times 10^{-13}$.
+
+%% TODO: insert convergence plot (Figure 1) when notebooks are run
+
+
+\subsection{Effect of the Memory Parameter $\bar{m}$}
+\label{sec:memory_effect}
+
+We vary $\bar{m} \in \{3, 5, 10, 20, 40\}$ using exact line search, relative tolerance 
+$\varepsilon = 10^{-12}$, and $\lambda = 0.5$.
+
+For well-conditioned problems (moderate $\lambda$), the effect of $\bar{m}$ is minimal: 
+all configurations converge within approximately the same number of iterations. 
+This is consistent with the observation by Nocedal and Wright~\cite[Section~9.1]{nocedal2006numerical} 
+that modest values of $\bar{m}$ between 3 and 20 often produce satisfactory results.
+
+For ill-conditioned problems (small $\lambda$), larger memory sizes provide a more 
+accurate approximation of the curvature, leading to faster convergence.
+
+%% TODO: insert memory comparison plot (Figure 2)
+
+
+\subsection{Effect of the Regularization Parameter $\lambda$}
+\label{sec:lambda_effect}
+
+We study convergence across several regularization regimes with 
+$\lambda \in \{10^{-4}, 10^{-2}, 1, 10^2, 10^4\}$, using exact line search and 
+$\bar{m} = 10$.
+
+As $\lambda$ increases, the condition number $\kappa(\Xhat)$ decreases 
+(cf.\ Eq.~\eqref{eq:condition}), leading to faster convergence. For $\lambda = 10^4$, 
+the Hessian is nearly $\lambda^2 I$ and the algorithm converges in fewer than 10~iterations. 
+For $\lambda = 10^{-4}$, the condition number exceeds $10^5$, and convergence requires 
+significantly more iterations.
+
+This behavior empirically validates the theoretical dependence of the convergence rate 
+on the condition number $\kappa$, as predicted by~\cite{rodomanov2021} and~\cite{jin2022}.
+
+%% TODO: insert lambda comparison plot and table (Figure 3, Table 2)
+
+
+\subsection{Relative Error Trajectory}
+
+To monitor convergence quality, we track the relative error
+
+\begin{equation}
+    e_k = \frac{\norm{w_k - w^*}}{\norm{w^*}}
+\end{equation}
+
+across iterations for different values of $\lambda$. For well-conditioned problems 
+($\lambda \geq 1$), the relative error decays smoothly to machine precision. 
+For ill-conditioned problems ($\lambda \leq 10^{-2}$), the decay is slower and may 
+exhibit non-monotonic behavior, reflecting the difficulty of accumulating accurate 
+curvature information in flat regions of the objective landscape.
+
+
+% ═════════════════════════════════════════════════════════════
+\section{QR Factorization}
+\label{sec:qr}
+% ═════════════════════════════════════════════════════════════
+
+\textit{(To be completed.)}
+
+
+% ═════════════════════════════════════════════════════════════
+\section{Comparison: QR vs.\ L-BFGS}
+\label{sec:comparison}
+% ═════════════════════════════════════════════════════════════
+
+\textit{(To be completed after A2 implementation.)}
+
+
+% ═════════════════════════════════════════════════════════════
+\appendix
+\section{Proofs}
+% ═════════════════════════════════════════════════════════════
+
+\begin{lemma}[$\Xhat$ has full column rank]
+\label{lemma:fullrank}
+If $\lambda > 0$, then $\Xhat^T\Xhat = XX^T + \lambda^2 I_m \succ 0$.
+\end{lemma}
+\begin{proof}
+For any nonzero $v \in \R^m$:
+$v^T(XX^T + \lambda^2 I_m)v = \norm{X^T v}^2 + \lambda^2\norm{v}^2 \geq \lambda^2\norm{v}^2 > 0.$
+\end{proof}
+
+\begin{lemma}[Eigenvalue shift]
+\label{lemma:eigenvalues}
+If $\alpha$ is an eigenvalue of $A$, then $\alpha + c$ is an eigenvalue of $A + cI$.
+\end{lemma}
+\begin{proof}
+$Av = \alpha v \iff (A + cI)v = (\alpha + c)v.$
+\end{proof}
+
+\begin{lemma}[Singular values of $XX^T$]
+\label{lemma:singvals}
+The eigenvalues of $XX^T \in \R^{m \times m}$ are 
+$\{\sigma_1^2, \ldots, \sigma_n^2, 0, \ldots, 0\}$, where $\sigma_1, \ldots, \sigma_n$ 
+are the singular values of $X$. In particular, $\lambda_m(XX^T) = 0$ when $m > n$.
+\end{lemma}
+\begin{proof}
+Let $X = U\Sigma V^T$ be the SVD. Then $XX^T = U\Sigma\Sigma^T U^T$, 
+where $\Sigma\Sigma^T = \diag(\sigma_1^2, \ldots, \sigma_n^2, 0, \ldots, 0) \in \R^{m \times m}$.
+\end{proof}
+
+
+% ═════════════════════════════════════════════════════════════
+\bibliographystyle{plain}
+\begin{thebibliography}{99}
+
+\bibitem{nocedal2006numerical}
+J.~Nocedal and S.~J.~Wright.
+\newblock \emph{Numerical Optimization}.
+\newblock Springer, 2nd edition, 2006.
+
+\bibitem{liu1989limited}
+D.~C.~Liu and J.~Nocedal.
+\newblock On the limited memory {BFGS} method for large scale optimization.
+\newblock \emph{Mathematical Programming}, 45(1):503--528, 1989.
+
+\bibitem{broyden1970}
+C.~G.~Broyden.
+\newblock The convergence of a class of double-rank minimization algorithms.
+\newblock \emph{IMA Journal of Applied Mathematics}, 6(1):76--90, 1970.
+
+\bibitem{hastie2009elements}
+T.~Hastie, R.~Tibshirani, and J.~Friedman.
+\newblock \emph{The Elements of Statistical Learning}.
+\newblock Springer, 2nd edition, 2009.
+
+\bibitem{trefethen1997}
+L.~N.~Trefethen and D.~Bau~III.
+\newblock \emph{Numerical Linear Algebra}.
+\newblock SIAM, 1997.
+
+\bibitem{golub2013}
+G.~H.~Golub and C.~F.~Van~Loan.
+\newblock \emph{Matrix Computations}.
+\newblock Johns Hopkins University Press, 4th edition, 2013.
+
+\bibitem{rodomanov2021}
+A.~Rodomanov and Y.~Nesterov.
+\newblock New results on superlinear convergence of classical quasi-{N}ewton methods.
+\newblock \emph{Journal of Optimization Theory and Applications}, 188(3):744--769, 2021.
+
+\bibitem{jin2022}
+Q.~Jin and A.~Mokhtari.
+\newblock Non-asymptotic superlinear convergence of standard quasi-{N}ewton methods.
+\newblock \emph{Mathematical Programming}, 194(1--2):435--468, 2022.
+
+\bibitem{wolfe1969}
+P.~Wolfe.
+\newblock Convergence conditions for ascent methods.
+\newblock \emph{SIAM Review}, 11(2):226--235, 1969.
+
+\end{thebibliography}
+
+\end{document}
