@@ -3,24 +3,24 @@
 lbfgs.py — A1: Limited-Memory BFGS (L-BFGS)
 ================================================================================
 
-Algoritmo L-BFGS per il problema:
+L-BFGS algorithm for the problem:
     min_w  f(w) = (1/2)||X^T w - y||^2 + (1/2) lambda^2 ||w||^2
 
-Riferimenti:
+References:
     - Nocedal & Wright, "Numerical Optimization", 2006
       - Algorithm 9.1  (Two-Loop Recursion)
       - Algorithm 9.2  (L-BFGS)
-      - Eq. 9.6        (Scaling iniziale gamma_k)
-      - Eq. 3.25       (Exact line search su quadratiche)
-      - Eq. 3.7        (Condizioni di Wolfe forti)
+      - Eq. 9.6        (Initial scaling gamma_k)
+      - Eq. 3.25       (Exact line search on quadratics)
+      - Eq. 3.7        (Strong Wolfe conditions)
     - Liu & Nocedal, "On the limited memory BFGS method for large scale
       optimization", Mathematical Programming 45, 1989
 
-Componenti implementate:
+Implemented components:
     1. Two-loop recursion          (Algorithm 9.1)
-    2. Exact line search           (Eq. 3.25 generalizzata)
-    3. Strong Wolfe line search    (Eq. 3.7 con zoom + interpolazione cubica)
-    4. Main loop L-BFGS            (Algorithm 9.2)
+    2. Exact line search           (Generalized Eq. 3.25)
+    3. Strong Wolfe line search    (Eq. 3.7 with zoom + cubic interpolation)
+    4. L-BFGS main loop            (Algorithm 9.2)
 ================================================================================
 """
 
@@ -35,39 +35,39 @@ from utils import compute_loss, compute_gradient
 
 def lbfgs_two_loop(grad_k, s_list, y_list, rho_list, gamma_k):
     """
-    Calcola il prodotto H_k * grad_k tramite la two-loop recursion.
+    Calculates the product H_k * grad_k via the two-loop recursion.
 
-    La matrice H_k (approssimazione dell'inversa dell'Hessiana) NON viene
-    mai formata esplicitamente. Si usano solo le m coppie {s_i, y_i} più
-    recenti e lo scaling H_0 = gamma_k * I.
+    The matrix H_k (approximation of the inverse Hessian) is NEVER
+    formed explicitly. Only the m most recent {s_i, y_i} pairs and
+    the scaling H_0 = gamma_k * I are used.
 
-    Costo: O(4 * m_history * dim) moltiplicazioni + O(dim) per H_0.
+    Cost: O(4 * m_history * dim) multiplications + O(dim) for H_0.
 
-    Parametri
+    Parameters
     ---------
-    grad_k   : ndarray (dim,)       gradiente corrente
+    grad_k   : ndarray (dim,)       current gradient
     s_list   : list of ndarray       s_i = w_{i+1} - w_i
     y_list   : list of ndarray       y_i = grad_{i+1} - grad_i
     rho_list : list of float         rho_i = 1 / (y_i^T s_i)
-    gamma_k  : float                 scaling per H_0 = gamma_k * I
+    gamma_k  : float                 scaling for H_0 = gamma_k * I
 
-    Ritorna
+    Returns
     -------
-    r : ndarray (dim,)   prodotto H_k * grad_k
+    r : ndarray (dim,)   product H_k * grad_k
     """
     mem = len(s_list)
     q = grad_k.copy()
     alpha = np.zeros(mem)
 
-    # Loop all'indietro: i = k-1, k-2, ..., k-m (backward pass)
+    # Backward loop: i = k-1, k-2, ..., k-m
     for i in range(mem - 1, -1, -1):
         alpha[i] = rho_list[i] * np.dot(s_list[i], q)
         q -= alpha[i] * y_list[i]
 
-    # Moltiplicazione per H_0 = gamma_k * I
+    # Multiplication by H_0 = gamma_k * I
     r = gamma_k * q
 
-    # Loop in avanti: i = k-m, k-m+1, ..., k-1 (forward pass)
+    # Forward loop: i = k-m, k-m+1, ..., k-1
     for i in range(mem):
         beta = rho_list[i] * np.dot(y_list[i], r)
         r += s_list[i] * (alpha[i] - beta)
@@ -76,33 +76,33 @@ def lbfgs_two_loop(grad_k, s_list, y_list, rho_list, gamma_k):
 
 
 # =============================================================================
-# 2. EXACT LINE SEARCH PER PROBLEMI QUADRATICI
+# 2. EXACT LINE SEARCH FOR QUADRATIC PROBLEMS
 # =============================================================================
 #
-# Per f(w) = (1/2) w^T H w - b^T w con H = XX^T + lambda^2 I,
-# la tomografia phi(alpha) = f(w + alpha*p) è una parabola
-# il cui minimo è (Nocedal & Wright, Eq. 3.25 generalizzata):
+# For f(w) = (1/2) w^T H w - b^T w with H = XX^T + lambda^2 I,
+# the 1D slice phi(alpha) = f(w + alpha*p) is a parabola
+# whose minimum is (Nocedal & Wright, generalized Eq. 3.25):
 #
 #     alpha_min = - grad^T p / (p^T H p)
 #
-# dove  p^T H p = ||X^T p||^2 + lambda^2 ||p||^2.
-# Costo: un solo prodotto X^T p, ovvero O(mn).
+# where p^T H p = ||X^T p||^2 + lambda^2 ||p||^2.
+# Cost: a single X^T p product, which is O(mn).
 # =============================================================================
 
 def exact_line_search(grad, p, X, lam):
     """
-    Step length ottimale per il problema quadratico.
+    Optimal step length for the quadratic problem.
 
-    Parametri
+    Parameters
     ---------
-    grad : ndarray (m,)   gradiente nabla f(w)
-    p    : ndarray (m,)   direzione di discesa
-    X    : ndarray (m, n) matrice dei dati
-    lam  : float          parametro di regolarizzazione
+    grad : ndarray (m,)   gradient nabla f(w)
+    p    : ndarray (m,)   descent direction
+    X    : ndarray (m, n) data matrix
+    lam  : float          regularization parameter
 
-    Ritorna
+    Returns
     -------
-    alpha : float   step length ottimale
+    alpha : float   optimal step length
     """
     Xtp = X.T @ p                                          # (n,)
     pHp = np.dot(Xtp, Xtp) + (lam ** 2) * np.dot(p, p)   # p^T H p
@@ -117,15 +117,15 @@ def exact_line_search(grad, p, X, lam):
 # 3. STRONG WOLFE LINE SEARCH  (Nocedal & Wright, Eq. 3.7)
 # =============================================================================
 #
-# Condizioni di Wolfe forti:
+# Strong Wolfe conditions:
 #   (i)   f(w + alpha*p) <= f(w) + c1*alpha*grad^T p      (Armijo)
-#   (ii)  |grad_new^T p| <= c2 * |grad^T p|               (curvatura)
+#   (ii)  |grad_new^T p| <= c2 * |grad^T p|               (curvature)
 #
-# Per quasi-Newton: c1 = 1e-4, c2 = 0.9 (Nocedal, Sezione 3.1).
+# For quasi-Newton: c1 = 1e-4, c2 = 0.9 (Nocedal, Section 3.1).
 # =============================================================================
 
 def _cubic_interpolation(a_lo, a_hi, f_lo, f_hi, g_lo, g_hi):
-    """Interpolazione cubica tra due punti per trovare il minimo."""
+    """Cubic interpolation between two points to find the minimum."""
     d1 = g_lo + g_hi - 3.0 * (f_hi - f_lo) / (a_hi - a_lo)
     disc = d1 * d1 - g_lo * g_hi
     if disc < 0:
@@ -142,7 +142,7 @@ def _cubic_interpolation(a_lo, a_hi, f_lo, f_hi, g_lo, g_hi):
 def _zoom(f_func, grad_func, w, p, f_0, dg_0,
           a_lo, a_hi, f_lo, f_hi, dg_lo,
           X, y, lam, c1, c2, max_iter=10):
-    """Procedura di zoom per la line search (Nocedal, Algorithm 3.3)."""
+    """Zoom procedure for the line search (Nocedal, Algorithm 3.3)."""
     evals = 0
     for _ in range(max_iter):
         alpha_j = _cubic_interpolation(
@@ -174,21 +174,21 @@ def strong_wolfe_line_search(w, p, f_0, grad_0, dg_0,
                              X, y, lam,
                              c1=1e-4, c2=0.9, alpha_init=1.0, max_ls=25):
     """
-    Line search con condizioni di Wolfe forti.
+    Line search with strong Wolfe conditions.
 
-    Parametri
+    Parameters
     ---------
-    w       : ndarray (m,)   punto corrente
-    p       : ndarray (m,)   direzione di discesa
+    w       : ndarray (m,)   current point
+    p       : ndarray (m,)   descent direction
     f_0     : float          f(w)
     grad_0  : ndarray (m,)   nabla f(w)
-    dg_0    : float          grad_0^T p  (< 0 se p è di discesa)
-    X, y, lam                parametri del problema
-    c1, c2  : float          costanti di Wolfe
-    alpha_init : float       step iniziale (1.0 per quasi-Newton)
-    max_ls  : int            massimo tentativi
+    dg_0    : float          grad_0^T p  (< 0 if p is a descent direction)
+    X, y, lam                problem parameters
+    c1, c2  : float          Wolfe constants
+    alpha_init : float       initial step length (1.0 for quasi-Newton)
+    max_ls  : int            maximum number of attempts
 
-    Ritorna
+    Returns
     -------
     alpha, f_new, grad_new, ls_evals
     """
@@ -243,47 +243,47 @@ def lbfgs_optimize(X, y, lam,
                    line_search='exact',
                    verbose=True):
     """
-    Minimizza f(w) = (1/2)||X^T w - y||^2 + (1/2) lambda^2 ||w||^2
-    con il metodo L-BFGS (Algorithm 9.2, Nocedal & Wright).
+    Minimizes f(w) = (1/2)||X^T w - y||^2 + (1/2) lambda^2 ||w||^2
+    with the L-BFGS method (Algorithm 9.2, Nocedal & Wright).
 
-    Parametri
+    Parameters
     ---------
-    X           : ndarray (m, n)  matrice dei dati
-    y           : ndarray (n,)    vettore target
-    lam         : float           parametro di regolarizzazione (lambda > 0)
-    m_history   : int             numero di coppie (s, y) in memoria [3, 20]
-    max_iter    : int             massimo numero di iterazioni
-    tol         : float           tolleranza per il criterio di arresto
+    X           : ndarray (m, n)  data matrix
+    y           : ndarray (n,)    target vector
+    lam         : float           regularization parameter (lambda > 0)
+    m_history   : int             number of (s, y) pairs in memory [3, 20]
+    max_iter    : int             maximum number of iterations
+    tol         : float           tolerance for the stopping criterion
     tol_type    : str             'relative' -> ||grad_k|| <= tol * ||grad_0||
                                   'absolute' -> ||grad_k|| <= tol
-    line_search : str             'exact'  -> exact LS quadratica (Eq. 3.25)
+    line_search : str             'exact'  -> exact quadratic LS (Eq. 3.25)
                                   'wolfe'  -> strong Wolfe LS (Eq. 3.7)
-    verbose     : bool            stampa informazioni durante l'esecuzione
+    verbose     : bool            print information during execution
 
-    Ritorna
+    Returns
     -------
-    w       : ndarray (m,)   soluzione ottimale
-    history : dict           storie di f, ||grad||, alpha, ls_evals, rel_error
-    elapsed : float          tempo di esecuzione (secondi)
+    w       : ndarray (m,)   optimal solution
+    history : dict           histories of f, ||grad||, alpha, ls_evals, rel_error
+    elapsed : float          execution time (seconds)
     """
     m_dim = X.shape[0]
 
-    # --- Inizializzazione ---
+    # --- Initialization ---
     w = np.zeros(m_dim)
     grad = compute_gradient(w, X, y, lam)
     f_val = compute_loss(w, X, y, lam)
 
-    # Soglia di arresto
+    # Stopping threshold
     grad_0_norm = np.sqrt(np.dot(grad, grad))
     if tol_type == 'relative':
         stop_tol = tol * grad_0_norm
     else:
         stop_tol = tol
 
-    # Memoria limitata
+    # Limited memory
     s_list, y_list, rho_list = [], [], []
 
-    # Storici
+    # History
     history = {
         'f':         [f_val],
         'grad_norm': [grad_0_norm],
@@ -293,7 +293,7 @@ def lbfgs_optimize(X, y, lam,
 
     if verbose:
         print(f"[L-BFGS] m={m_dim}, ls='{line_search}', "
-              f"tol={tol} ({tol_type}, soglia={stop_tol:.2e}), "
+              f"tol={tol} ({tol_type}, threshold={stop_tol:.2e}), "
               f"m_history={m_history}")
 
     start_time = time.time()
@@ -301,20 +301,20 @@ def lbfgs_optimize(X, y, lam,
     for k in range(max_iter):
         grad_norm = np.sqrt(np.dot(grad, grad))
 
-        # --- Criterio di arresto primario ---
+        # --- Primary stopping criterion ---
         if grad_norm < stop_tol:
             if verbose:
-                print(f"[L-BFGS] Convergenza a iter {k}: "
+                print(f"[L-BFGS] Convergence at iter {k}: "
                       f"||grad||={grad_norm:.2e} < {stop_tol:.2e}")
             break
 
-        # Criterio aggiuntivo: stagnazione numerica
+        # Additional criterion: numerical stagnation
         if k > 0 and len(history['alpha']) > 0:
             f_prev = history['f'][-2]
             rel_change = abs(f_val - f_prev) / max(abs(f_val), 1e-30)
             if rel_change < 1e-16 and history['alpha'][-1] < 1e-12:
                 if verbose:
-                    print(f"[L-BFGS] Stagnazione a iter {k}: "
+                    print(f"[L-BFGS] Stagnation at iter {k}: "
                           f"||grad||={grad_norm:.2e}")
                 break
 
@@ -325,11 +325,11 @@ def lbfgs_optimize(X, y, lam,
         else:
             gamma_k = 1.0 / grad_norm if grad_norm > 0 else 1.0
 
-        # --- Direzione di discesa: p = -H_k grad  (Algorithm 9.1) ---
+        # --- Descent direction: p = -H_k grad  (Algorithm 9.1) ---
         Hg = lbfgs_two_loop(grad, s_list, y_list, rho_list, gamma_k)
         p = -Hg
 
-        # Verifica discesa
+        # Check descent
         dg = np.dot(grad, p)
         if dg >= 0:
             p = -grad
@@ -346,7 +346,7 @@ def lbfgs_optimize(X, y, lam,
             alpha, f_new, grad_new, ls_evals = strong_wolfe_line_search(
                 w, p, f_val, grad, dg, X, y, lam, alpha_init=1.0)
 
-        # --- Aggiornamento coppia (s_k, y_k) ---
+        # --- Pair update (s_k, y_k) ---
         s_k = alpha * p
         y_k = grad_new - grad
         ys = np.dot(y_k, s_k)
@@ -360,30 +360,30 @@ def lbfgs_optimize(X, y, lam,
                 y_list.pop(0)
                 rho_list.pop(0)
         elif ys <= 1e-16 and len(s_list) > 0:
-            # Curvatura troppo piccola: reset memoria (cfr. Liu & Nocedal)
+            # Curvature too small: reset memory (cf. Liu & Nocedal)
             s_list.clear()
             y_list.clear()
             rho_list.clear()
 
-        # --- Aggiornamento stato ---
+        # --- State update ---
         w = w + s_k
         grad = grad_new
         f_val = f_new
 
-        # --- Storico ---
+        # --- History ---
         history['f'].append(f_val)
         history['grad_norm'].append(np.sqrt(np.dot(grad, grad)))
         history['alpha'].append(alpha)
         history['ls_evals'].append(ls_evals)
 
-        # --- Log periodico ---
+        # --- Periodic log ---
         if verbose and (k % 100 == 0 or k < 5):
             print(f"  k={k:4d}  f={f_val:.8e}  "
                   f"||g||={history['grad_norm'][-1]:.2e}  "
                   f"α={alpha:.4e}")
     else:
         if verbose:
-            print(f"[L-BFGS] Max iter raggiunto ({max_iter}).")
+            print(f"[L-BFGS] Max iter reached ({max_iter}).")
 
     elapsed = time.time() - start_time
     return w, history, elapsed
