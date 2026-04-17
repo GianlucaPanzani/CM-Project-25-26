@@ -1,24 +1,24 @@
 """
 ================================================================================
-qr_householder.py — A2: Thin QR Factorization con Householder Reflectors
+qr_householder.py — A2: Thin QR Factorization with Householder Reflectors
 ================================================================================
 
-Fattorizzazione QR thin della matrice aumentata:
+Thin QR factorization of the augmented matrix:
 
     hat_X = [X^T; lambda*I_m]  ∈ R^{(n+m) x m}
 
-Variante compatta: NON si forma la matrice Q esplicitamente.
-Si memorizzano i vettori di Householder u_k e si usano per applicare
-implicitamente i prodotti Q*v e Q^T*v.
+Compact variant: matrix Q is NOT formed explicitly.
+Householder vectors u_k are stored and used to apply
+the products Q*v and Q^T*v implicitly.
 
-Costo computazionale: O((n+m) * m^2), che è al più quadratico in m
-quando n = O(m) (come richiesto dalla consegna).
+Computational cost: O((n+m) * m^2), which is at most quadratic in m
+when n = O(m) (as required by the assignment).
 
-Riferimenti:
+References:
     - Trefethen & Bau, "Numerical Linear Algebra", Lecture 10, 1997
     - Golub & Van Loan, "Matrix Computations", 4th ed., 2013
 
-TODO: implementare
+TODO: implement
 ================================================================================
 """
 
@@ -27,97 +27,97 @@ import numpy as np
 
 def householder_vector(x):
     """
-    Calcola il vettore di Householder u tale che H*x = ||x||*e_1,
-    dove H = I - 2*u*u^T/||u||^2.
+    Computes the Householder vector u such that H*x = ||x||*e_1,
+    where H = I - 2*u*u^T/||u||^2.
 
-    Parametri
+    Parameters
     ---------
-    x : ndarray (d,)  vettore di input
+    x : ndarray (d,)  input vector
 
-    Ritorna
+    Returns
     -------
-    u : ndarray (d,)  vettore di Householder (normalizzato)
+    u : ndarray (d,)  Householder vector (normalized)
     s : float         -sign(x_0) * ||x||
     """
-    # TODO: implementare
-    raise NotImplementedError("A2 non ancora implementato")
+    # TODO: implement
+    raise NotImplementedError("A2 not implemented yet")
 
 
 def qr_factorize(A):
     """
-    Fattorizzazione QR thin tramite riflettori di Householder.
-    Forma compatta: memorizza i vettori u_k, non forma Q.
+    Thin QR factorization via Householder reflectors.
+    Compact form: stores vectors u_k and does not form Q.
 
-    Parametri
+    Parameters
     ---------
-    A : ndarray (rows, cols)  matrice di input, rows >= cols
+    A : ndarray (rows, cols)  input matrix, rows >= cols
 
-    Ritorna
+    Returns
     -------
-    R        : ndarray (cols, cols)     matrice R triangolare superiore
-    u_list   : list of ndarray          vettori di Householder
+    R        : ndarray (cols, cols)     upper triangular matrix R
+    u_list   : list of ndarray          Householder vectors
     """
-    # TODO: implementare
-    raise NotImplementedError("A2 non ancora implementato")
+    # TODO: implement
+    raise NotImplementedError("A2 not implemented yet")
 
 
 def apply_QT(u_list, b, rows):
     """
-    Calcola Q^T * b senza formare Q, usando i vettori di Householder.
+    Computes Q^T * b without forming Q, using Householder vectors.
 
-    Parametri
+    Parameters
     ---------
-    u_list : list of ndarray   vettori di Householder dalla fattorizzazione
-    b      : ndarray (rows,)   vettore di input
-    rows   : int               numero di righe della matrice originale
+    u_list : list of ndarray   Householder vectors from factorization
+    b      : ndarray (rows,)   input vector
+    rows   : int               number of rows of the original matrix
 
-    Ritorna
+    Returns
     -------
-    ndarray (rows,)   prodotto Q^T * b
+    ndarray (rows,)   product Q^T * b
     """
-    # TODO: implementare
-    raise NotImplementedError("A2 non ancora implementato")
+    # TODO: implement
+    raise NotImplementedError("A2 not implemented yet")
 
 
 def back_substitution(R, b):
     """
-    Risolve il sistema triangolare superiore R*w = b.
+    Solves the upper triangular system R*w = b.
 
-    Parametri
+    Parameters
     ---------
-    R : ndarray (m, m)  matrice triangolare superiore
-    b : ndarray (m,)    vettore dei termini noti
+    R : ndarray (m, m)  upper triangular matrix
+    b : ndarray (m,)    right-hand side vector
 
-    Ritorna
+    Returns
     -------
-    w : ndarray (m,)  soluzione
+    w : ndarray (m,)  solution
     """
-    # TODO: implementare
-    raise NotImplementedError("A2 non ancora implementato")
+    # TODO: implement
+    raise NotImplementedError("A2 not implemented yet")
 
 
 def qr_solve(X, y, lam):
     """
-    Risolve min_w ||hat_X w - hat_y|| tramite fattorizzazione QR.
+    Solves min_w ||hat_X w - hat_y|| via QR factorization.
 
-    Procedura:
-    1. Costruisci hat_X e hat_y
-    2. QR factorization di hat_X  -> hat_X = Q * R
-    3. Calcola Q^T * hat_y  (implicito, tramite Householder)
-    4. Risolvi R * w = (Q^T hat_y)[:m]  tramite back-substitution
+    Procedure:
+    1. Build hat_X and hat_y
+    2. QR factorization of hat_X  -> hat_X = Q * R
+    3. Compute Q^T * hat_y  (implicit, via Householder)
+    4. Solve R * w = (Q^T hat_y)[:m]  via back-substitution
 
-    Costo totale: O((n+m)*m^2) + O((n+m)*m) + O(m^2) = O((n+m)*m^2)
+    Total cost: O((n+m)*m^2) + O((n+m)*m) + O(m^2) = O((n+m)*m^2)
 
-    Parametri
+    Parameters
     ---------
-    X   : ndarray (m, n)  matrice dei dati
-    y   : ndarray (n,)    vettore target
-    lam : float           parametro di regolarizzazione
+    X   : ndarray (m, n)  data matrix
+    y   : ndarray (n,)    target vector
+    lam : float           regularization parameter
 
-    Ritorna
+    Returns
     -------
-    w       : ndarray (m,)  soluzione
-    elapsed : float         tempo di esecuzione (secondi)
+    w       : ndarray (m,)  solution
+    elapsed : float         execution time (seconds)
     """
-    # TODO: implementare
-    raise NotImplementedError("A2 non ancora implementato")
+    # TODO: implement
+    raise NotImplementedError("A2 not implemented yet")
