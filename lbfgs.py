@@ -601,7 +601,7 @@ def lbfgs_optimize(X, y, lam,
 
         if verbose and (k % 100 == 0 or k < 5):
             print(f"  k={k:4d}  f={f_val:.8e}  "
-                  f"||g||={history['grad_norm'][-1]:.2e}  "
+                  f"||g||={history['grad_norm'][-1]}  "
                   f"α={alpha:.4e}  mem={len(s_list)}")
     else:
         if verbose:
