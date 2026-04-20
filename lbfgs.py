@@ -568,8 +568,7 @@ def lbfgs_optimize(X, y, lam,
                 history['restarts'].append(k)
                 did_restart = True
                 if verbose:
-                    print(f"  [restart] iter {k}: curvature dropped, "
-                          f"memory cleared")
+                    print(f"  [restart] iter {k}: curvature dropped, memory cleared")
 
         # --- Standard skip / store logic ---
         if ys > 1e-10:
