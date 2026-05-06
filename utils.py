@@ -264,6 +264,7 @@ def compute_condition_number(X, lam):
     where lambda_1, lambda_m are the maximum and minimum eigenvalues of XX^T.
     """
     eigvals = np.linalg.eigvalsh(X @ X.T)
+    eigvals = np.maximum(eigvals, 0.0)
     lam_max = eigvals[-1] + lam ** 2
     lam_min = eigvals[0] + lam ** 2
     return np.sqrt(lam_max / lam_min)

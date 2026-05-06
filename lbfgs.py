@@ -33,7 +33,11 @@ Implemented components:
     4. L-BFGS main loop            (Nocedal & Wright, Algorithm 9.2)
     5. Curvature-based restart     (Liu & Nocedal 1989, Section 4)
     6. Adaptive H0 scaling         (Barzilai & Borwein 1988)
-    7. Flop counter                (derived from Algorithm 9.1 structure)
+    7. Flop counter                (derived from Algorithm 9.1 structure;
+                                    supports both 'exact' and 'wolfe' LS)
+    8. Robust benchmarking wrapper (median over N runs with warm-up;
+                                    used to obtain reliable wall-clock
+                                    measurements on sub-millisecond runs)
 ================================================================================
 """
 
@@ -365,7 +369,7 @@ def _compute_gamma(s_list, y_list, scaling='nocedal',
 
 
 # =============================================================================
-# [NEW] 7. FLOP COUNTER  (derived from Algorithm 9.1 structure)
+# 7. FLOP COUNTER  (derived from Algorithm 9.1 structure)
 # =============================================================================
 #
 # Per-iteration flop count of L-BFGS (dominant terms only):
@@ -383,41 +387,50 @@ def _compute_gamma(s_list, y_list, scaling='nocedal',
 #          Total: (2*mem + 4) * m  floats
 # =============================================================================
 
-def theoretical_cost(m, n, mem, n_iter):
+def theoretical_cost(m, n, mem, n_iter,
+                     line_search='exact', avg_wolfe_evals=3):
     """
     Compute theoretical flop count and storage for L-BFGS.
 
     Parameters
     ----------
-    m      : int   problem dimension (number of rows of X)
-    n      : int   number of features (columns of X)
-    mem    : int   L-BFGS memory size (m_history)
-    n_iter : int   number of iterations performed
+    m, n, mem, n_iter : as before
+    line_search       : 'exact' or 'wolfe'
+    avg_wolfe_evals   : int, average number of (f, grad) re-evaluations
+                        inside the Wolfe bracketing+zoom (typical: 2-4
+                        for a well-implemented quasi-Newton LS).
 
     Returns
     -------
-    dict with keys:
-        'flops_per_iter'  : dominant flops per iteration
-        'total_flops'     : total flops over n_iter iterations
-        'storage_floats'  : number of floats stored (excluding X)
-        'storage_MB'      : storage in megabytes (float64)
+    dict with keys 'flops_per_iter', 'total_flops',
+                   'storage_floats', 'storage_MB', 'line_search'.
     """
-    two_loop   = (4 * mem + 1) * m          # two-loop recursion
-    grad_eval  = 2 * m * n                  # gradient: X(X^T w - y)
-    exact_ls   = m * n + 2 * m              # X^T p + two dot products
+    two_loop   = (4 * mem + 1) * m          # Algorithm 9.1
+    grad_eval  = 2 * m * n                  # X(X^T w - y)
     update     = 2 * m                      # s_k = alpha*p, y_k = g_new - g
 
-    flops_per_iter = two_loop + grad_eval + exact_ls + update
+    if line_search == 'exact':
+        # one X^T p (mn) + p^T H p assembly (m) + grad^T p (m) = mn + 2m
+        ls_cost = m * n + 2 * m
+    elif line_search == 'wolfe':
+        # Each trial point: f eval (mn) + grad eval (2mn) = 3 m n
+        # Plus dot products with p (~2m) per trial.
+        ls_cost = avg_wolfe_evals * (3 * m * n + 2 * m)
+    else:
+        raise ValueError(f"Unknown line_search='{line_search}'")
+
+    flops_per_iter = two_loop + grad_eval + ls_cost + update
     total_flops    = n_iter * flops_per_iter
 
-    storage_floats = (2 * mem + 4) * m      # pairs + w, grad, s_k, y_k
-    storage_MB     = storage_floats * 8 / 1e6   # float64 = 8 bytes
+    storage_floats = (2 * mem + 4) * m
+    storage_MB     = storage_floats * 8 / 1e6
 
     return {
         'flops_per_iter' : flops_per_iter,
         'total_flops'    : total_flops,
         'storage_floats' : storage_floats,
         'storage_MB'     : storage_MB,
+        'line_search'    : line_search,
     }
 
 
@@ -438,6 +451,57 @@ def print_cost_table(m, n, mem_values=(3, 5, 10, 20, 40), n_iter=50):
               f"{c['storage_MB']:>12.3f}")
     print(f"{'='*70}\n")
 
+# =============================================================================
+# 8. ROBUST BENCHMARKING WRAPPER
+# =============================================================================
+#
+# Wall-time measurements with a single run are unreliable for problems
+# that solve in O(ms): OS scheduling, cache warm-up, and JIT effects
+# easily change the timing by 10-50%. This wrapper repeats the call N
+# times and returns robust statistics (median is preferred over mean
+# because it is insensitive to occasional outliers from the OS).
+# =============================================================================
+
+def benchmark_lbfgs(X, y, lam, n_runs=5, **kwargs):
+    """
+    Run lbfgs_optimize n_runs times and return robust timing statistics.
+
+    Parameters
+    ----------
+    X, y, lam : problem data
+    n_runs    : int, number of repetitions (>=3 recommended; default 5)
+    **kwargs  : passed to lbfgs_optimize (verbose is forced to False)
+
+    Returns
+    -------
+    w_last   : ndarray  solution from the last run
+    h_last   : dict     history from the last run
+    stats    : dict     keys: 'n_iter', 'n_runs', 'time_median',
+                              'time_min', 'time_mean', 'time_std',
+                              'time_all'
+    """
+    kwargs['verbose'] = False
+    times  = np.empty(n_runs)
+    w_last = None
+    h_last = None
+
+    # Warm-up run (not counted): primes caches, triggers any first-time
+    # imports/allocations. Crucial when reporting sub-millisecond timings.
+    w_last, h_last, _ = lbfgs_optimize(X, y, lam, **kwargs)
+
+    for i in range(n_runs):
+        w_last, h_last, t = lbfgs_optimize(X, y, lam, **kwargs)
+        times[i] = t
+
+    return w_last, h_last, {
+        'n_iter'      : len(h_last['f']) - 1,
+        'n_runs'      : n_runs,
+        'time_median' : float(np.median(times)),
+        'time_min'    : float(times.min()),
+        'time_mean'   : float(times.mean()),
+        'time_std'    : float(times.std(ddof=1)) if n_runs > 1 else 0.0,
+        'time_all'    : times.tolist(),
+    }
 
 # =============================================================================
 # 4. L-BFGS MAIN LOOP  (Nocedal & Wright, Algorithm 9.2)  — Enhanced
@@ -452,7 +516,12 @@ def lbfgs_optimize(X, y, lam,
                    h0_scaling='nocedal',
                    use_restart=True,
                    restart_xi=0.2,
-                   verbose=True):
+                   w_star=None,
+                   f_star=None,
+                   verbose=True,
+                   w_init=None,
+                   wolfe_c1=1e-4,
+                   wolfe_c2=0.9):
     """
     Minimizes f(w) = (1/2)||X^T w - y||^2 + (1/2) lambda^2 ||w||^2
     with the L-BFGS method (Nocedal & Wright, Algorithm 9.2).
@@ -472,18 +541,51 @@ def lbfgs_optimize(X, y, lam,
                          'safeguarded' (BB2 clipped, Dai & Liao 2002)
     use_restart : bool   enable curvature-based restart (Liu & Nocedal 1989)
     restart_xi  : float  restart threshold in (0,1); default 0.2
+    w_star      : ndarray (m,) or None
+                  Optional reference solution. When provided, the iterate
+                  distance ||w_k - w*|| is recorded at every iteration in
+                  history['dist_to_opt']. Used only for diagnostic /
+                  empirical-convergence-rate experiments; the optimizer
+                  itself does not use it.
+    f_star      : float or None
+                  Optional reference optimal value. When provided, the
+                  sub-optimality gap f(w_k) - f(w*) is recorded at every
+                  iteration in history['gap_to_opt'].
     verbose     : bool
+    w_init      : ndarray (m,) or None
+                  Initial iterate. If None (default), starts from zeros.
+                  Used by experiments studying sensitivity to w_0.
+    wolfe_c1    : float, sufficient-decrease (Armijo) constant for the
+                  Wolfe LS. Default 1e-4 (Nocedal & Wright Sec. 3.1
+                  recommendation for quasi-Newton). Ignored if
+                  line_search='exact'.
+    wolfe_c2    : float, curvature constant for the Wolfe LS. Default 0.9
+                  (quasi-Newton standard). Smaller values produce stricter
+                  line searches: more f/grad evaluations per iter, but
+                  better-conditioned (s_k, y_k) pairs and potentially
+                  fewer outer iterations. Must satisfy wolfe_c1 < wolfe_c2.
+                  Ignored if line_search='exact'.
 
     Returns
     -------
-    w         : ndarray (m,)
-    history   : dict  keys: f, grad_norm, alpha, ls_evals, restarts
-    elapsed   : float  seconds
+    w         : ndarray (m,)   final iterate
+    history   : dict
+                  Always present keys:
+                    'f'         : list of f(w_k)
+                    'grad_norm' : list of ||grad f(w_k)||
+                    'alpha'     : list of step lengths (one per iter)
+                    'ls_evals'  : list of line-search evaluations per iter
+                    'restarts'  : iteration indices where memory was cleared
+                  Optional keys (only if w_star / f_star were passed):
+                    'dist_to_opt' : list of ||w_k - w*||
+                    'gap_to_opt'  : list of f(w_k) - f(w*)
+    elapsed   : float          wall-clock seconds (single run; use
+                               benchmark_lbfgs for robust timing)
     """
     m_dim = X.shape[0]
 
     # --- Initialization ---
-    w    = np.zeros(m_dim)
+    w    = np.zeros(m_dim) if w_init is None else np.asarray(w_init, dtype=float).copy()
     grad = compute_gradient(w, X, y, lam)
     f_val = compute_loss(w, X, y, lam)
 
@@ -500,13 +602,17 @@ def lbfgs_optimize(X, y, lam,
         'ls_evals'  : [],
         'restarts'  : [],   # iteration indices where restart occurred
     }
+    if w_star is not None:
+        history['dist_to_opt'] = [float(np.linalg.norm(w - w_star))]
+    if f_star is not None:
+        history['gap_to_opt'] = [float(f_val - f_star)]
 
     if verbose:
         print(f"[L-BFGS] m={m_dim}, n={X.shape[1]}, ls='{line_search}', "
               f"h0='{h0_scaling}', restart={use_restart}(xi={restart_xi}), "
               f"tol={tol} ({tol_type}), m_history={m_history}")
 
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     for k in range(max_iter):
         grad_norm = np.sqrt(np.dot(grad, grad))
@@ -551,7 +657,8 @@ def lbfgs_optimize(X, y, lam,
             ls_evals = 1
         else:
             alpha, f_new, grad_new, ls_evals = strong_wolfe_line_search(
-                w, p, f_val, grad, dg, X, y, lam, alpha_init=1.0)
+                w, p, f_val, grad, dg, X, y, lam,
+                c1=wolfe_c1, c2=wolfe_c2, alpha_init=1.0)
 
         # --- Compute new pair ---
         s_k = alpha * p
@@ -599,6 +706,11 @@ def lbfgs_optimize(X, y, lam,
         history['alpha'].append(alpha)
         history['ls_evals'].append(ls_evals)
 
+        if w_star is not None:
+            history['dist_to_opt'].append(float(np.linalg.norm(w - w_star)))
+        if f_star is not None:
+            history['gap_to_opt'].append(float(f_val - f_star))
+
         if verbose and (k % 100 == 0 or k < 5):
             print(f"  k={k:4d}  f={f_val:.8e}  "
                   f"||g||={history['grad_norm'][-1]}  "
@@ -607,5 +719,5 @@ def lbfgs_optimize(X, y, lam,
         if verbose:
             print(f"[L-BFGS] Max iter reached ({max_iter}).")
 
-    elapsed = time.time() - start_time
+    elapsed = time.perf_counter() - start_time
     return w, history, elapsed
