@@ -1,0 +1,35 @@
+\contentsline {section}{\numberline {1}Introduction}{3}{section.1}%
+\contentsline {section}{\numberline {2}Problem Properties}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Gradient and Hessian}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Strong Convexity and Smoothness}{3}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Condition Number}{4}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Limited-Memory BFGS (L-BFGS)}{4}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Quasi-Newton Methods: Background}{4}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}The L-BFGS Algorithm}{4}{subsection.3.2}%
+\contentsline {subsubsection}{\numberline {3.2.1}Initial Scaling}{4}{subsubsection.3.2.1}%
+\contentsline {subsubsection}{\numberline {3.2.2}Two-Loop Recursion}{5}{subsubsection.3.2.2}%
+\contentsline {subsubsection}{\numberline {3.2.3}Curvature Safeguard}{5}{subsubsection.3.2.3}%
+\contentsline {subsection}{\numberline {3.3}Line Search Strategies}{5}{subsection.3.3}%
+\contentsline {subsubsection}{\numberline {3.3.1}Strong Wolfe Conditions}{5}{subsubsection.3.3.1}%
+\contentsline {subsubsection}{\numberline {3.3.2}Exact Line Search for Quadratic Objectives}{5}{subsubsection.3.3.2}%
+\contentsline {subsection}{\numberline {3.4}Complete Algorithm}{6}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Stopping Criterion}{6}{subsection.3.5}%
+\contentsline {subsection}{\numberline {3.6}Convergence Analysis}{7}{subsection.3.6}%
+\contentsline {subsubsection}{\numberline {3.6.1}Global Linear Convergence}{7}{subsubsection.3.6.1}%
+\contentsline {subsubsection}{\numberline {3.6.2}Superlinear Convergence}{7}{subsubsection.3.6.2}%
+\contentsline {subsubsection}{\numberline {3.6.3}Computational Complexity}{7}{subsubsection.3.6.3}%
+\contentsline {section}{\numberline {4}L-BFGS Experimental Results}{7}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Exact Line Search vs.\ Strong Wolfe Line Search}{8}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}Effect of the Memory Parameter $\bar {m}$}{8}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Effect of the Regularization Parameter $\lambda $}{8}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Relative Error Trajectory}{8}{subsection.4.4}%
+\contentsline {section}{\numberline {5}QR Factorization}{9}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Thin QR Factorization}{9}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Algorithmic Structure}{10}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Cost for the Project Matrix}{10}{subsection.5.3}%
+\contentsline {section}{\numberline {6}QR with Householder Reflectors}{11}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Dense Householder QR}{11}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Structured Householder Row Insertion}{12}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Complexity and Numerical Properties}{13}{subsection.6.3}%
+\contentsline {section}{\numberline {7}Comparison: QR vs.\ L-BFGS}{13}{section.7}%
+\contentsline {section}{\numberline {A}Proofs}{13}{appendix.A}%
