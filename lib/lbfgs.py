@@ -43,7 +43,7 @@ Implemented components:
 
 import numpy as np
 import time
-from utils import compute_loss, compute_gradient
+from lib.utils import compute_loss, compute_gradient
 
 
 # =============================================================================
