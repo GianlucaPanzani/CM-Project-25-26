@@ -565,14 +565,14 @@ has a unique minimizer.
 
 \subsection{Thin QR Factorization}
 
-For a full-column-rank matrix $A\in\R^{p\times m}$, with $p=n+m\geq m$, the thin QR 
+For a full-column-rank matrix $A\in\R^{(n+m)\times m}$, the thin QR 
 factorization is
 
 \begin{equation}
 \label{eq:thin_qr}
     A = Q_1 R,
     \qquad
-    Q_1 \in \R^{p\times m}, \quad Q_1^T Q_1 = I_m,
+    Q_1 \in \R^{(n+m)\times m}, \quad Q_1^T Q_1 = I_m,
     \quad
     R \in \R^{m\times m},
 \end{equation}
@@ -590,7 +590,7 @@ completion of $Q_1$, then
     \begin{bmatrix}
         c \\ d
     \end{bmatrix},
-    \quad c\in\R^m,\ d\in\R^{p-m}.
+    \quad c\in\R^m,\ d\in\R^{n}.
 \end{equation}
 
 Orthogonal transformations preserve the Euclidean norm, hence
