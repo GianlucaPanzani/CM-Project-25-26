@@ -151,7 +151,7 @@ def apply_QT(u_list, b, rows):
     if len(reflectors) > rows:
         raise ValueError("u_list contains more reflectors than rows")
 
-    # Apply H_0, H_1, ... so the final result is H_k ... H_1 H_0 b = Q^T b.
+    # Apply H_0, H_1, ... H_k so the final result is H_k ... H_1 H_0 b = Q^T b.
     result = b.copy()
     for k, stored_u in enumerate(reflectors):
         u = _as_real_array(stored_u, f"u_list[{k}]")
