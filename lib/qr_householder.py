@@ -21,7 +21,9 @@ References:
 ================================================================================
 """
 
+import math
 import time
+
 import lib.utils as utils
 import numpy as np
 
@@ -250,6 +252,73 @@ def back_substitution(R, b):
     return w
 
 
+def _householder_vector_2d(first, second):
+    """Return the normalized Householder vector for a two-entry column."""
+    first = float(first)
+    second = float(second)
+    if not math.isfinite(first) or not math.isfinite(second):
+        raise ValueError("x must contain only finite values")
+
+    scale = max(abs(first), abs(second))
+    if scale == 0.0:
+        return 0.0, 0.0, 0.0
+
+    scaled_first = first / scale
+    scaled_second = second / scale
+    scaled_norm = math.sqrt(scaled_first**2 + scaled_second**2)
+    norm = scale * scaled_norm
+    if not math.isfinite(norm):
+        raise ValueError("the norm of x exceeds the floating-point range")
+
+    sign = 1.0 if first >= 0.0 else -1.0
+    u_first = scaled_first + sign * scaled_norm
+    u_second = scaled_second
+    u_norm = math.sqrt(u_first * u_first + u_second * u_second)
+    return u_first / u_norm, u_second / u_norm, -sign * norm
+
+
+def _factorize_row_insertions(X, lam, y=None, store_reflectors=True):
+    """Run row insertion, optionally transforming its right-hand side."""
+    m, n = X.shape
+    R = lam * np.eye(m)
+    c = None if y is None else np.zeros(m)
+    reflectors = [] if store_reflectors else None
+
+    # Insert the n rows of X.T one at a time below the triangular factor.
+    for i in range(n):
+        inserted_row = X[:, i].copy()
+        data_row_index = m + i if store_reflectors else None
+        data_rhs = None if y is None else float(y[i])
+
+        # Eliminate the inserted row from left to right.
+        for k in range(m):
+            u_first, u_second, diagonal = _householder_vector_2d(R[k, k], inserted_row[k])
+
+            if u_first != 0.0 or u_second != 0.0:
+                r_tail = R[k, k:]
+                inserted_tail = inserted_row[k:]
+                projection = 2.0 * (u_first * r_tail + u_second * inserted_tail)
+                r_tail -= u_first * projection
+                inserted_tail -= u_second * projection
+
+                # Applying the reflector now is equivalent to a later Q^T scan.
+                if c is not None:
+                    top_value = c[k]
+                    squared_norm = u_first * u_first + u_second * u_second
+                    coefficient = 2.0 * (u_first * top_value + u_second * data_rhs) / squared_norm
+                    c[k] -= coefficient * u_first
+                    data_rhs -= coefficient * u_second
+
+            # Record the triangular structure exactly.
+            R[k, k] = diagonal
+            inserted_row[k] = 0.0
+            if store_reflectors:
+                u = np.array([u_first, u_second])
+                reflectors.append((k, data_row_index, u))
+
+    return R, reflectors, c
+
+
 def qr_factorize_row_insertion(X, lam):
     """
     Factor ``[lam*I_m; X.T]`` with the report's row-insertion algorithm.
@@ -269,33 +338,7 @@ def qr_factorize_row_insertion(X, lam):
     reflectors : list             embedded two-dimensional reflectors
     """
     X, lam = _validate_matrix_and_lambda(X, lam)
-    m, n = X.shape
-    R = lam * np.eye(m)
-    reflectors = []
-
-    # Insert the n rows of X.T one at a time below the triangular factor.
-    for i in range(n):
-        inserted_row = X[:, i].copy()
-        data_row_index = m + i
-
-        # Eliminate the inserted row from left to right.
-        for k in range(m):
-            active_pair = np.array([R[k, k], inserted_row[k]])
-            u, diagonal = householder_vector(active_pair)
-
-            r_tail = R[k, k:]
-            inserted_tail = inserted_row[k:]
-            projection = 2.0 * (
-                u[0] * r_tail + u[1] * inserted_tail
-            )
-            r_tail -= u[0] * projection
-            inserted_tail -= u[1] * projection
-
-            # Record the triangular structure exactly.
-            R[k, k] = diagonal
-            inserted_row[k] = 0.0
-            reflectors.append((k, data_row_index, u))
-
+    R, reflectors, _ = _factorize_row_insertions(X, lam)
     return R, reflectors
 
 
@@ -459,14 +502,12 @@ def dense_qr_solve(X_value, y_value, lam_value):
 def qr_solve_row_insertion(X, y, lam):
     """Solve the project problem with the report's structured QR algorithm."""
     X, y, lam = _validate_regularized_problem(X, y, lam)
-    m = X.shape[0]
 
-    # Factorize, transform the permuted right-hand side, and solve R*w=c.
+    # Transform the right-hand side during factorization.  This preserves the
+    # row-insertion order without storing and scanning all n*m reflectors.
     start = time.perf_counter()
-    R, reflectors = qr_factorize_row_insertion(X, lam) # R = sup triangular matrix got by deleting each row of X (one by one)
-    permuted_y = np.concatenate((np.zeros(m), y)) 
-    c = apply_row_insertion_Q(reflectors, permuted_y, transpose=True) # c = Q^T b
-    w = back_substitution(R, c[:m]) # Rw = c
+    R, _, c = _factorize_row_insertions(X, lam, y=y, store_reflectors=False)
+    w = back_substitution(R, c)
     elapsed = time.perf_counter() - start
 
     return w, elapsed
