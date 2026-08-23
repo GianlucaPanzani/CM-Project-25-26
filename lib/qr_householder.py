@@ -150,7 +150,7 @@ def qr_factorize(A):
     return R, u_list
 
 
-def apply_Q(u_list, b, rows, transpose=False):
+def apply_QT(u_list, b, rows):
     """
     Apply Q, or Q^T when ``transpose=True``, without forming Q.
 
@@ -163,31 +163,15 @@ def apply_Q(u_list, b, rows, transpose=False):
     u_list : list of ndarray   Householder vectors from factorization
     b      : ndarray (rows,)   input vector
     rows   : int               number of rows of the original matrix
-    transpose : bool           apply Q^T instead of Q
 
     Returns
     -------
     ndarray (rows,)   requested orthogonal product
     """
-    if not isinstance(rows, (int, np.integer)) or rows < 0:
-        raise ValueError("rows must be a non-negative integer")
-    if not isinstance(transpose, (bool, np.bool_)):
-        raise TypeError("transpose must be a Boolean")
-
-    b = _as_real_array(b, "b")
-    if b.shape != (rows,):
-        raise ValueError(f"b must have shape ({rows},)")
-
-    try:
-        reflectors = list(u_list)
-    except TypeError as exc:
-        raise TypeError("u_list must be an iterable of Householder vectors") from exc
-    if len(reflectors) > rows:
-        raise ValueError("u_list contains more reflectors than rows")
 
     # Validate every reflector before modifying the result.
     checked_reflectors = []
-    for k, stored_u in enumerate(reflectors):
+    for k, stored_u in enumerate(u_list):
         u = _as_real_array(stored_u, f"u_list[{k}]")
         expected_shape = (rows - k,)
         if u.shape != expected_shape:
@@ -197,23 +181,15 @@ def apply_Q(u_list, b, rows, transpose=False):
         checked_reflectors.append((k, u))
 
     # Applying the stored order gives Q^T; reversing that order gives Q.
-    application_order = (
-        checked_reflectors if transpose else reversed(checked_reflectors)
-    )
     result = b.copy()
-    for k, u in application_order:
-        squared_norm = np.dot(u, u)
-        if squared_norm == 0.0:
+    for k, u in checked_reflectors:
+        u_squared_norm = np.dot(u, u)
+        if u_squared_norm == 0.0:
             continue
-        coefficient = 2.0 * np.dot(u, result[k:]) / squared_norm
+        coefficient = 2.0 * np.dot(u, result[k:]) / u_squared_norm
         result[k:] -= coefficient * u
 
     return result
-
-
-def apply_QT(u_list, b, rows):
-    """Apply Q^T through the backward-compatible explicit interface."""
-    return apply_Q(u_list, b, rows, transpose=True)
 
 
 def back_substitution(R, b):
@@ -229,25 +205,16 @@ def back_substitution(R, b):
     -------
     w : ndarray (m,)  solution
     """
-    R = _as_real_array(R, "R")
-    b = _as_real_array(b, "b")
-    if R.ndim != 2 or R.shape[0] != R.shape[1]:
-        raise ValueError("R must be a square two-dimensional array")
-
     size = R.shape[0]
-    if b.shape != (size,):
-        raise ValueError(f"b must have shape ({size},)")
-
-    # Solve from the last equation to the first one.
     w = np.empty(size, dtype=float)
-    for i in range(size - 1, -1, -1):
-        pivot = R[i, i]
-        if pivot == 0.0:
-            raise np.linalg.LinAlgError(
-                f"R is singular: zero diagonal entry at index {i}"
-            )
-        known_terms = np.dot(R[i, i + 1:], w[i + 1:])
-        w[i] = (b[i] - known_terms) / pivot
+
+    # Solve from the last equation to the first one
+    for i in range(size-1, -1, -1):
+
+        # Dot product between non-zero R values and w_i computed in the prev iters
+        v = np.dot(R[i, i+1:], w[i+1:])
+
+        w[i] = (b[i] - v) / R[i,i]
 
     return w
 
@@ -292,28 +259,28 @@ def _factorize_row_insertions(X, lam, y=None, store_reflectors=True):
 
         # Eliminate the inserted row from left to right.
         for k in range(m):
-            u_first, u_second, diagonal = _householder_vector_2d(R[k, k], inserted_row[k])
+            u_1, u_2, diagonal_value = _householder_vector_2d(R[k, k], inserted_row[k])
 
-            if u_first != 0.0 or u_second != 0.0:
+            if u_1 != 0.0 or u_2 != 0.0:
                 r_tail = R[k, k:]
                 inserted_tail = inserted_row[k:]
-                projection = 2.0 * (u_first * r_tail + u_second * inserted_tail)
-                r_tail -= u_first * projection
-                inserted_tail -= u_second * projection
+                projection = 2.0 * (u_1 * r_tail + u_2 * inserted_tail)
+                r_tail -= u_1 * projection
+                inserted_tail -= u_2 * projection
 
                 # Applying the reflector now is equivalent to a later Q^T scan.
                 if c is not None:
                     top_value = c[k]
-                    squared_norm = u_first * u_first + u_second * u_second
-                    coefficient = 2.0 * (u_first * top_value + u_second * data_rhs) / squared_norm
-                    c[k] -= coefficient * u_first
-                    data_rhs -= coefficient * u_second
+                    u_squared_norm = u_1 * u_1 + u_2 * u_2
+                    coefficient = 2.0 * (u_1 * top_value + u_2 * data_rhs) / u_squared_norm
+                    c[k] -= coefficient * u_1
+                    data_rhs -= coefficient * u_2
 
             # Record the triangular structure exactly.
-            R[k, k] = diagonal
+            R[k, k] = diagonal_value
             inserted_row[k] = 0.0
             if store_reflectors:
-                u = np.array([u_first, u_second])
+                u = np.array([u_1, u_2])
                 reflectors.append((k, data_row_index, u))
 
     return R, reflectors, c
@@ -401,7 +368,7 @@ def apply_row_insertion_Q(reflectors, b, transpose=False):
     return result
 
 
-def factorize_augmented_system(X, lam):
+def _factorize_augmented_system(X, lam):
     """
     Factor [lam*I_m; X^T] while exploiting the zeros in the identity block.
 
@@ -410,48 +377,61 @@ def factorize_augmented_system(X, lam):
     """
     m, n = X.shape
     R = lam * np.eye(m)
-    data_rows = X.T.copy()
+    X_T = X.T.copy()
     u_list = []
 
     # Each reflector touches one row of R and the n dense data rows.
     for k in range(m):
-        active_column = np.concatenate(([R[k, k]], data_rows[:, k]))
-        compact_u, s = householder_vector(active_column)
+        # Create the current active block: first row from R, remaining rows from X.T
+        active_block = np.vstack((
+            R[k, k:],
+            X_T[:, k:]
+        ))
 
-        r_tail = R[k, k:]
-        data_block = data_rows[:, k:]
-        projection = 2.0 * (
-            compact_u[0] * r_tail + compact_u[1:] @ data_block
-        )
-        r_tail -= compact_u[0] * projection
-        data_block -= np.outer(compact_u[1:], projection)
+        # Householder vector of the first column
+        u, s = householder_vector(active_block[:, 0])
 
-        # Record the triangular structure exactly.
-        R[k, k] = s
-        data_rows[:, k] = 0.0
+        # Apply H = I - 2uu^T to the entire active block
+        active_block -= 2.0 * np.outer(u, u @ active_block)
 
-        u_list.append(compact_u)
+        # Record the exact triangular structure (for the first column)
+        active_block[0, 0] = s
+        active_block[1:, 0] = 0.0
+
+        # Update R and X_T with the transformed block
+        R[k, k:] = active_block[0, :]
+        X_T[:, k:] = active_block[1:, :]
+
+        u_list.append(u)
 
     return R, u_list
 
 
-def apply_augmented_QT(u_list, b, m):
-    """Apply the compact reflectors for [lam*I_m; X^T] to b."""
-    result = b.copy()
-    data_part = result[m:]
+def apply_augmented_QT(u_list, b_perm, m):
+    """Apply the compact reflectors for [lam*I_m; X^T] to b_perm."""
+    c = b_perm.copy()
+    y_transformed = c[m:]
 
-    # Reflector k acts only on result[k] and the final n components.
+    active_vector = np.empty(y_transformed.size + 1, dtype=c.dtype)
+
+    # Apply the reflectors to b_perm getting c
     for k, u in enumerate(u_list):
-        squared_norm = np.dot(u, u)
-        if squared_norm == 0.0:
+        u_squared_norm = np.dot(u, u)
+        if u_squared_norm == 0.0:
             continue
-        coefficient = 2.0 * (
-            u[0] * result[k] + np.dot(u[1:], data_part)
-        ) / squared_norm
-        result[k] -= coefficient * u[0]
-        data_part -= coefficient * u[1:]
+        
+        # Build the n+1 size vector to which apply the reflectors
+        active_vector[0] = c[k]
+        active_vector[1:] = y_transformed
 
-    return result
+        # Apply the reflectors to the active_vector
+        active_vector -= (2.0 * u * (u @ active_vector) / u_squared_norm)
+
+        # Update the modified k-th element of b_perm
+        c[k] = active_vector[0]
+        y_transformed = active_vector[1:]
+
+    return c
 
 
 def qr_solve(X, y, lam):
@@ -480,22 +460,26 @@ def qr_solve(X, y, lam):
     X, y, lam = _validate_regularized_problem(X, y, lam)
     m, n = X.shape
 
-    # Time the factorization, the implicit Q^T product, and the triangular solve.
     start = time.perf_counter()
-    R, u_list = factorize_augmented_system(X, lam)
-    augmented_y = np.concatenate((np.zeros(m), y))
-    c = apply_augmented_QT(u_list, augmented_y, m)
+
+    # From A_perm (implicitly made by X and lam) we get R and the householder reflectors
+    R, u_list = _factorize_augmented_system(X, lam)
+    b_perm = np.concatenate((np.zeros(m), y))
+    c = apply_augmented_QT(u_list, b_perm, m)
     w = back_substitution(R, c[:m]) # Rw = c
-    elapsed = time.perf_counter() - start
+
+    end = time.perf_counter()
+    elapsed = end - start
 
     return w, elapsed
 
 def dense_qr_solve(X_value, y_value, lam_value):
     """Follow the compact dense QR algorithm from the report."""
     A, b = utils.build_augmented_system(X_value, y_value, lam_value)
+
     # Compute R and b transformed by the application of the householder vectors (reflectors)
     R, reflectors = qr_factorize(A)
-    c = apply_Q(reflectors, b, A.shape[0], transpose=True)
+    c = apply_QT(reflectors, b, A.shape[0])
     w = back_substitution(R, c[:X_value.shape[0]]) # Rw = c
     return w, R, reflectors
 
