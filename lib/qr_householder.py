@@ -23,92 +23,30 @@ References:
 
 import math
 import time
-
-import lib.utils as utils
 import numpy as np
 
 
-def _as_real_array(value, name):
-    """Return a finite, real-valued NumPy array with floating-point entries."""
-    array = np.asarray(value)
-    if np.iscomplexobj(array):
-        raise TypeError(f"{name} must contain real values")
-
-    try:
-        array = np.asarray(value, dtype=float)
-    except (TypeError, ValueError) as exc:
-        raise TypeError(f"{name} must be a numeric array") from exc
-
-    if not np.all(np.isfinite(array)):
-        raise ValueError(f"{name} must contain only finite values")
-    return array
 
 
-def _validate_matrix_and_lambda(X, lam):
-    """Validate the data matrix and the positive regularization parameter."""
-    X = _as_real_array(X, "X")
-    lam_array = _as_real_array(lam, "lam")
+# =============================================================================
+# 1. NAIVE QR SOLVER
+# =============================================================================
 
-    if X.ndim != 2:
-        raise ValueError("X must be a two-dimensional array")
-    if lam_array.ndim != 0:
-        raise ValueError("lam must be a scalar")
+def naive_qr_solver(A, b):
+    """Follow the compact dense QR algorithm of the report."""
+    m = A.shape[1]
 
-    lam = float(lam_array)
-    if lam <= 0.0:
-        raise ValueError("lam must be strictly positive")
-    return X, lam
+    start = time.perf_counter()
 
+    R, reflectors = qr_factorize_naive(A)
+    c = apply_QT(reflectors, b)
+    w = back_substitution(R, c[:m]) # Rw = c
 
-def _validate_regularized_problem(X, y, lam):
-    """Validate a complete regularized least-squares problem."""
-    X, lam = _validate_matrix_and_lambda(X, lam)
-    y = _as_real_array(y, "y")
-    if y.shape != (X.shape[1],):
-        raise ValueError(f"y must have shape ({X.shape[1]},)")
-    return X, y, lam
+    tot_time = time.perf_counter() - start
+    return R, w, c, reflectors, tot_time
 
 
-def householder_vector(x):
-    """
-    Computes the Householder vector u such that H*x = s*e_1,
-    where H = I - 2*u*u^T/||u||^2.
-
-    Parameters
-    ---------
-    x : ndarray (d,)  input vector
-
-    Returns
-    -------
-    u : ndarray (d,)  normalized Householder vector; zero if x is zero
-    s : float         -sign(x_0) * ||x||
-    """
-    x = _as_real_array(x, "x")
-    if x.ndim != 1 or x.size == 0:
-        raise ValueError("x must be a non-empty one-dimensional array")
-
-    # Scale first so the norm calculation is robust to very large or small values.
-    scale = np.max(np.abs(x))
-    if scale == 0.0:
-        return np.zeros_like(x), 0.0
-
-    scaled_x = x / scale
-    scaled_norm = np.linalg.norm(scaled_x)
-    norm_x = scale * scaled_norm
-    if not np.isfinite(norm_x):
-        raise ValueError("the norm of x exceeds the floating-point range")
-
-    # This sign choice avoids cancellation in the first component of u.
-    sign = 1.0 if x[0] >= 0.0 else -1.0
-    s = -sign * norm_x
-    u = scaled_x.copy()
-    u[0] += sign * scaled_norm
-    u /= np.linalg.norm(u)
-
-    return u, float(s)
-
-
-def qr_factorize(A):
+def qr_factorize_naive(A):
     """
     Thin QR factorization via Householder reflectors.
     Compact form: stores vectors u_k and does not form Q.
@@ -123,36 +61,30 @@ def qr_factorize(A):
     u_list   : list of ndarray          normalized vectors, with
                                           u_list[k].shape == (rows-k,)
     """
-    A = _as_real_array(A, "A")
-    if A.ndim != 2:
-        raise ValueError("A must be a two-dimensional array")
-
-    rows, cols = A.shape
-    if rows < cols:
-        raise ValueError("A must have at least as many rows as columns")
 
     # Work on a copy so that the caller's matrix is not modified.
-    transformed = A.copy()
+    m = A.shape[1]
+    A_transformed = A.copy()
     u_list = []
 
-    # Eliminate the entries below the diagonal one column at a time.
-    for k in range(cols):
-        u, s = householder_vector(transformed[k:, k])
-        trailing_block = transformed[k:, k:]
-        trailing_block -= 2.0 * np.outer(u, u @ trailing_block)
+    # Eliminate the entries below the diagonal one column at a time
+    for k in range(m):
+        u, s = compute_householder_vector(A_transformed[k:, k])
 
-        # Store exact structural zeros instead of round-off-sized residuals.
-        transformed[k, k] = s
-        transformed[k + 1:, k] = 0.0
+        # Apply reflectors to A_transformed
+        A_transformed[k:, k:] -= 2.0 * np.outer(u, u @ A_transformed[k:, k:])
+        A_transformed[k, k] = s
+        A_transformed[k+1:, k] = 0.0
+
         u_list.append(u)
 
-    R = np.triu(transformed[:cols, :cols])
+    R = np.triu(A_transformed[:m, :m])
     return R, u_list
 
 
-def apply_QT(u_list, b, rows):
+def apply_QT(u_list, b):
     """
-    Apply Q, or Q^T when ``transpose=True``, without forming Q.
+    Apply Q^T without forming Q.
 
     If the factorization stores H_0, ..., H_{r-1}, then
     Q^T = H_{r-1} ... H_0.  Consequently, Q^T uses the reflectors in
@@ -161,28 +93,16 @@ def apply_QT(u_list, b, rows):
     Parameters
     ---------
     u_list : list of ndarray   Householder vectors from factorization
-    b      : ndarray (rows,)   input vector
-    rows   : int               number of rows of the original matrix
+    b      : ndarray           input vector
 
     Returns
     -------
-    ndarray (rows,)   requested orthogonal product
+    ndarray        requested orthogonal product
     """
-
-    # Validate every reflector before modifying the result.
-    checked_reflectors = []
-    for k, stored_u in enumerate(u_list):
-        u = _as_real_array(stored_u, f"u_list[{k}]")
-        expected_shape = (rows - k,)
-        if u.shape != expected_shape:
-            raise ValueError(
-                f"u_list[{k}] must have shape {expected_shape}, got {u.shape}"
-            )
-        checked_reflectors.append((k, u))
 
     # Applying the stored order gives Q^T; reversing that order gives Q.
     result = b.copy()
-    for k, u in checked_reflectors:
+    for k, u in enumerate(u_list):
         u_squared_norm = np.dot(u, u)
         if u_squared_norm == 0.0:
             continue
@@ -219,156 +139,84 @@ def back_substitution(R, b):
     return w
 
 
-def _householder_vector_2d(first, second):
-    """Return the normalized Householder vector for a two-entry column."""
-    first = float(first)
-    second = float(second)
-    if not math.isfinite(first) or not math.isfinite(second):
-        raise ValueError("x must contain only finite values")
-
-    scale = max(abs(first), abs(second))
-    if scale == 0.0:
-        return 0.0, 0.0, 0.0
-
-    scaled_first = first / scale
-    scaled_second = second / scale
-    scaled_norm = math.sqrt(scaled_first**2 + scaled_second**2)
-    norm = scale * scaled_norm
-    if not math.isfinite(norm):
-        raise ValueError("the norm of x exceeds the floating-point range")
-
-    sign = 1.0 if first >= 0.0 else -1.0
-    u_first = scaled_first + sign * scaled_norm
-    u_second = scaled_second
-    u_norm = math.sqrt(u_first * u_first + u_second * u_second)
-    return u_first / u_norm, u_second / u_norm, -sign * norm
-
-
-def _factorize_row_insertions(X, lam, y=None, store_reflectors=True):
-    """Run row insertion, optionally transforming its right-hand side."""
-    m, n = X.shape
-    R = lam * np.eye(m)
-    c = None if y is None else np.zeros(m)
-    reflectors = [] if store_reflectors else None
-
-    # Insert the n rows of X.T one at a time below the triangular factor.
-    for i in range(n):
-        inserted_row = X[:, i].copy()
-        data_row_index = m + i if store_reflectors else None
-        data_rhs = None if y is None else float(y[i])
-
-        # Eliminate the inserted row from left to right.
-        for k in range(m):
-            u_1, u_2, diagonal_value = _householder_vector_2d(R[k, k], inserted_row[k])
-
-            if u_1 != 0.0 or u_2 != 0.0:
-                r_tail = R[k, k:]
-                inserted_tail = inserted_row[k:]
-                projection = 2.0 * (u_1 * r_tail + u_2 * inserted_tail)
-                r_tail -= u_1 * projection
-                inserted_tail -= u_2 * projection
-
-                # Applying the reflector now is equivalent to a later Q^T scan.
-                if c is not None:
-                    top_value = c[k]
-                    u_squared_norm = u_1 * u_1 + u_2 * u_2
-                    coefficient = 2.0 * (u_1 * top_value + u_2 * data_rhs) / u_squared_norm
-                    c[k] -= coefficient * u_1
-                    data_rhs -= coefficient * u_2
-
-            # Record the triangular structure exactly.
-            R[k, k] = diagonal_value
-            inserted_row[k] = 0.0
-            if store_reflectors:
-                u = np.array([u_1, u_2])
-                reflectors.append((k, data_row_index, u))
-
-    return R, reflectors, c
-
-
-def qr_factorize_row_insertion(X, lam):
+def compute_householder_vector(x):
     """
-    Factor ``[lam*I_m; X.T]`` with the report's row-insertion algorithm.
-
-    Each data row is inserted below the current triangular factor.  A sequence
-    of two-dimensional Householder reflectors removes that row from left to
-    right.  A stored reflector is represented by ``(top_row, data_row, u)``.
+    Computes the Householder vector u such that H*x = s*e_1,
+    where H = I - 2*u*u^T/||u||^2.
 
     Parameters
-    ----------
-    X   : ndarray (m, n)  data matrix
-    lam : float           strictly positive regularization parameter
+    ---------
+    x : ndarray (d,)  input vector
 
     Returns
     -------
-    R          : ndarray (m, m)  upper triangular factor
-    reflectors : list             embedded two-dimensional reflectors
+    u : ndarray (d,)  normalized Householder vector; zero if x is zero
+    alpha : float         -sign(x_0) * ||x||
     """
-    X, lam = _validate_matrix_and_lambda(X, lam)
-    R, reflectors, _ = _factorize_row_insertions(X, lam)
-    return R, reflectors
+
+    # Scale first so the norm calculation is robust to very large or small values.
+    scale = np.max(np.abs(x))
+    if scale == 0.0:
+        return np.zeros_like(x), 0.0
+
+    scaled_x = x / scale
+    scaled_norm = np.linalg.norm(scaled_x)
+    norm_x = scale * scaled_norm
+    if not np.isfinite(norm_x):
+        raise ValueError("the norm of x exceeds the floating-point range")
+
+    # This sign choice avoids cancellation in the first component of u.
+    sign = 1.0 if x[0] >= 0.0 else -1.0
+    alpha = -sign * norm_x
+    u = scaled_x.copy()
+    u[0] += sign * scaled_norm
+    u /= np.linalg.norm(u)
+
+    return u, alpha
 
 
-def apply_row_insertion_Q(reflectors, b, transpose=False):
-    """Apply Q, or Q^T, from ``qr_factorize_row_insertion`` reflectors."""
-    if not isinstance(transpose, (bool, np.bool_)):
-        raise TypeError("transpose must be a Boolean")
 
-    b = _as_real_array(b, "b")
-    if b.ndim != 1:
-        raise ValueError("b must be a one-dimensional array")
+# =============================================================================
+# 2. STRUCTURE-BASED QR SOLVER
+# =============================================================================
 
-    try:
-        stored_reflectors = list(reflectors)
-    except TypeError as exc:
-        raise TypeError("reflectors must be an iterable") from exc
+def qr_solver_structure_based(X, y, lam):
+    """
+    Solves min_w ||hat_X w - hat_y|| via QR factorization.
 
-    # Validate the embedded row indices and vectors before applying them.
-    checked_reflectors = []
-    for j, stored_reflector in enumerate(stored_reflectors):
-        try:
-            top_row, data_row, stored_u = stored_reflector
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"reflectors[{j}] must be a (top_row, data_row, u) triple"
-            ) from exc
+    Procedure:
+    1. Permute the augmented system to [lambda*I_m; X^T]
+    2. Factor it while exploiting the diagonal first block
+    3. Compute Q^T * [0; y] implicitly via stored reflectors
+    4. Solve R*w = (Q^T*[0; y])[:m] by back-substitution
 
-        valid_indices = all(
-            isinstance(index, (int, np.integer))
-            and not isinstance(index, (bool, np.bool_))
-            for index in (top_row, data_row)
-        )
-        if not valid_indices:
-            raise TypeError("reflector row indices must be integers")
-        if not (0 <= top_row < b.size and 0 <= data_row < b.size):
-            raise ValueError(f"reflectors[{j}] contains an invalid row index")
-        if top_row == data_row:
-            raise ValueError("a reflector must act on two different rows")
+    Total cost: O(n*m^2 + m^2), which is quadratic in m for fixed n.
 
-        u = _as_real_array(stored_u, f"reflectors[{j}].u")
-        if u.shape != (2,):
-            raise ValueError(f"reflectors[{j}].u must have shape (2,)")
-        checked_reflectors.append((top_row, data_row, u))
+    Parameters
+    ---------
+    X   : ndarray (m, n)  data matrix
+    y   : ndarray (n,)    target vector
+    lam : float           regularization parameter
 
-    application_order = (
-        checked_reflectors if transpose else reversed(checked_reflectors)
-    )
-    result = b.copy()
+    Returns
+    -------
+    w       : ndarray (m,)  solution
+    tot_time : float         execution time (seconds)
+    """
+    m = X.shape[0]
+    b_perm = np.concatenate((np.zeros(m), y))
 
-    # Each reflector changes only its two embedded coordinates.
-    for top_row, data_row, u in application_order:
-        active_values = np.array([result[top_row], result[data_row]])
-        squared_norm = np.dot(u, u)
-        if squared_norm == 0.0:
-            continue
-        coefficient = 2.0 * np.dot(u, active_values) / squared_norm
-        active_values -= coefficient * u
-        result[top_row], result[data_row] = active_values
+    start = time.perf_counter()
 
-    return result
+    R, reflectors = qr_factorize_structure_based(X, lam)
+    c = apply_structure_based_QT(reflectors, b_perm, m)
+    w = back_substitution(R, c[:m]) # Rw = c
+
+    tot_time = time.perf_counter() - start
+    return R, w, c, reflectors, tot_time
 
 
-def _factorize_augmented_system(X, lam):
+def qr_factorize_structure_based(X, lam):
     """
     Factor [lam*I_m; X^T] while exploiting the zeros in the identity block.
 
@@ -389,7 +237,7 @@ def _factorize_augmented_system(X, lam):
         ))
 
         # Householder vector of the first column
-        u, s = householder_vector(active_block[:, 0])
+        u, s = compute_householder_vector(active_block[:, 0])
 
         # Apply H = I - 2uu^T to the entire active block
         active_block -= 2.0 * np.outer(u, u @ active_block)
@@ -407,7 +255,7 @@ def _factorize_augmented_system(X, lam):
     return R, u_list
 
 
-def apply_augmented_QT(u_list, b_perm, m):
+def apply_structure_based_QT(u_list, b_perm, m):
     """Apply the compact reflectors for [lam*I_m; X^T] to b_perm."""
     c = b_perm.copy()
     y_transformed = c[m:]
@@ -434,64 +282,79 @@ def apply_augmented_QT(u_list, b_perm, m):
     return c
 
 
-def qr_solve(X, y, lam):
-    """
-    Solves min_w ||hat_X w - hat_y|| via QR factorization.
 
-    Procedure:
-    1. Permute the augmented system to [lambda*I_m; X^T]
-    2. Factor it while exploiting the diagonal first block
-    3. Compute Q^T * [0; y] implicitly via stored reflectors
-    4. Solve R*w = (Q^T*[0; y])[:m] by back-substitution
+# =============================================================================
+# 3. ROW INSERTION 2D QR SOLVER
+# =============================================================================
 
-    Total cost: O(n*m^2 + m^2), which is quadratic in m for fixed n.
-
-    Parameters
-    ---------
-    X   : ndarray (m, n)  data matrix
-    y   : ndarray (n,)    target vector
-    lam : float           regularization parameter
-
-    Returns
-    -------
-    w       : ndarray (m,)  solution
-    elapsed : float         execution time (seconds)
-    """
-    X, y, lam = _validate_regularized_problem(X, y, lam)
-    m, n = X.shape
-
-    start = time.perf_counter()
-
-    # From A_perm (implicitly made by X and lam) we get R and the householder reflectors
-    R, u_list = _factorize_augmented_system(X, lam)
-    b_perm = np.concatenate((np.zeros(m), y))
-    c = apply_augmented_QT(u_list, b_perm, m)
-    w = back_substitution(R, c[:m]) # Rw = c
-
-    end = time.perf_counter()
-    elapsed = end - start
-
-    return w, elapsed
-
-def dense_qr_solve(X_value, y_value, lam_value):
-    """Follow the compact dense QR algorithm from the report."""
-    A, b = utils.build_augmented_system(X_value, y_value, lam_value)
-
-    # Compute R and b transformed by the application of the householder vectors (reflectors)
-    R, reflectors = qr_factorize(A)
-    c = apply_QT(reflectors, b, A.shape[0])
-    w = back_substitution(R, c[:X_value.shape[0]]) # Rw = c
-    return w, R, reflectors
-
-def qr_solve_row_insertion(X, y, lam):
+def qr_solver_row_insertion(X, y, lam):
     """Solve the project problem with the report's structured QR algorithm."""
-    X, y, lam = _validate_regularized_problem(X, y, lam)
-
-    # Transform the right-hand side during factorization.  This preserves the
-    # row-insertion order without storing and scanning all n*m reflectors.
     start = time.perf_counter()
-    R, _, c = _factorize_row_insertions(X, lam, y=y, store_reflectors=False)
-    w = back_substitution(R, c)
-    elapsed = time.perf_counter() - start
 
-    return w, elapsed
+    R, c, reflectors = qr_factorize_row_insertion_2d(X, lam, y, store_reflectors=True)
+    w = back_substitution(R, c)
+
+    tot_time = time.perf_counter() - start
+    return R, w, c, reflectors, tot_time
+
+
+def qr_factorize_row_insertion_2d(X, lam, y, store_reflectors=True):
+    """Run row insertion, optionally transforming its right-hand side."""
+    m, n = X.shape
+    R = lam * np.eye(m)
+    c = np.zeros(m)
+    reflectors = [] if store_reflectors else None
+
+    # Insert the n rows of X.T one at a time below the triangular factor.
+    for i in range(n):
+        row = X.T[i, :].copy()
+        yi_transformed = y[i]
+
+        # Eliminate the inserted row from left to right.
+        for k in range(m):
+            u1, u2, alpha = compute_householder_vector_2d(R[k, k], row[k])
+            
+            # Apply the reflectors to compute the coefficients (used to update the data)
+            coefficients = 2.0 * (u1 * R[k, k:] + u2 * row[k:])
+            coefficient = 2.0 * (u1 * c[k] + u2 * yi_transformed)
+
+            # Update the triangular matrix, the row of X.T and the b_perm
+            R[k, k] = alpha
+            R[k, k:] -= u1 * coefficients
+            row[k] = 0.0
+            row[k:] -= u2 * coefficients
+
+            c[k] -= coefficient * u1
+            yi_transformed -= coefficient * u2
+
+            # Case of storing reflectors
+            if store_reflectors:
+                reflectors.append((k, m+i, [u1,u2])) # iter, row index, reflector
+
+    return R, c, reflectors
+
+
+def compute_householder_vector_2d(v1: float, v2: float):
+    """Return the normalized Householder vector for a two-entry column."""
+    scale = max(abs(v1), abs(v2))
+    if scale == 0.0:
+        return 0.0, 0.0, 0.0
+
+    # Scale to avoid overflow when computing the norm
+    scaled_v1 = v1 / scale
+    scaled_v2 = v2 / scale
+    scaled_norm = math.sqrt(scaled_v1**2 + scaled_v2**2)
+
+    vector_norm = scale * scaled_norm
+    sign_v1 = 1.0 if v1 >= 0.0 else -1.0
+    alpha = -sign_v1 * vector_norm
+
+    # Compute v = x - alpha * e1 (but as the scaled version)
+    reflector_v1 = scaled_v1 + sign_v1 * scaled_norm
+    reflector_v2 = scaled_v2
+    reflector_norm = math.sqrt(reflector_v1 * reflector_v1 + reflector_v2 * reflector_v2)
+
+    u2 = reflector_v2 / reflector_norm
+    u1 = reflector_v1 / reflector_norm
+
+    return u1, u2, alpha
