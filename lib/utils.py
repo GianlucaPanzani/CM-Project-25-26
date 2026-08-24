@@ -283,3 +283,13 @@ def residual_norm(w, X, y, lam):
     X_hat, y_hat = build_augmented_system(X, y, lam)
     r = X_hat @ w - y_hat
     return np.sqrt(np.dot(r, r)) / np.sqrt(np.dot(y_hat, y_hat))
+
+
+def compute_scaled_optimality(w, X, y, lam, sigma_max):
+    if not np.all(np.isfinite(w)):
+        return np.nan
+    gradient_value = compute_gradient(w, X, y, lam)
+    data_residual = X.T @ w - y
+    augmented_residual_norm = np.hypot(np.linalg.norm(data_residual), lam * np.linalg.norm(w))
+    augmented_matrix_norm = np.hypot(sigma_max, lam)
+    return np.linalg.norm(gradient_value) / max(augmented_matrix_norm * augmented_residual_norm, np.finfo(float).tiny)
