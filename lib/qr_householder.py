@@ -1,24 +1,39 @@
-"""
-================================================================================
-qr_householder.py — A2: Thin QR Factorization with Householder Reflectors
-================================================================================
+"""Householder QR solvers for regularized linear least squares.
 
-Thin QR factorization of the augmented matrix:
+The project problem is
 
-    hat_X = [X^T; lambda*I_m]  ∈ R^{(n+m) x m}
+    minimize ||A_hat @ w - b_hat||_2,
+    A_hat = [X.T; lam*I_m] in R**((n+m) x m),
+    b_hat = [y; 0],
 
-Compact variant: matrix Q is NOT formed explicitly.
-Householder vectors u_k are stored and used to apply
-the products Q*v and Q^T*v implicitly.
+where ``X`` has shape ``(m, n)``, ``y`` has shape ``(n,)``, and
+``lam > 0``.  This module provides three implementations:
 
-The generic factorization costs O(rows * cols^2).  The regularized
-least-squares solver exploits the diagonal lambda*I_m block and costs
-O(n*m^2 + m^2), which is quadratic in m when n is fixed.
+* ``naive_qr_solver`` applies generic dense Householder QR to an explicit
+  tall matrix;
+* ``qr_solver_structure_based`` factors the row-permuted matrix
+  ``[lam*I_m; X.T]`` with compact reflectors of length ``n+1``;
+* ``qr_solver_row_insertion`` inserts the rows of ``X.T`` one at a time
+  with two-dimensional reflectors and updates the right-hand side during
+  the insertion.
 
-References:
-    - Trefethen & Bau, "Numerical Linear Algebra", Lecture 10, 1997
-    - Golub & Van Loan, "Matrix Computations", 4th ed., 2013
-================================================================================
+No solver forms ``Q`` explicitly.  The public reflector-application
+routines compute the part of ``Q.T`` required by their solvers.  Generic
+dense QR costs ``O(rows*cols**2)``.  The intended cost of either structured
+factorization followed by back substitution is ``O(n*m**2 + m**2)``, which
+is quadratic in ``m`` for fixed ``n``.
+
+The timing returned by a solver covers its factorization, implicit or fused
+right-hand-side transformation, and triangular solve.  Construction done by
+the caller, and construction of ``[0; y]`` in the structure-based solver,
+is excluded.  The routines assume shape-compatible, finite, real
+floating-point inputs and nonsingular triangular factors; complete input
+validation is not performed.
+
+References
+----------
+Trefethen and Bau, *Numerical Linear Algebra*, Lecture 10, 1997.
+Golub and Van Loan, *Matrix Computations*, 4th ed., 2013.
 """
 
 import math
@@ -33,7 +48,36 @@ import numpy as np
 # =============================================================================
 
 def naive_qr_solver(A, b):
-    """Follow the compact dense QR algorithm of the report."""
+    """Solve a tall least-squares problem by compact dense Householder QR.
+
+    Parameters
+    ----------
+    A : ndarray, shape (rows, m)
+        Explicit real floating-point matrix, with ``rows >= m``.
+    b : ndarray, shape (rows,)
+        Right-hand side.  It is not modified.
+
+    Returns
+    -------
+    R : ndarray, shape (m, m)
+        Upper-triangular factor.
+    w : ndarray, shape (m,)
+        Solution of ``R @ w = c[:m]``.
+    c : ndarray, shape (rows,)
+        Transformed right-hand side ``Q.T @ b``.
+    reflectors : list of ndarray
+        The ``m`` normalized Householder vectors.  Reflector ``k`` has
+        shape ``(rows-k,)``.
+    tot_time : float
+        Seconds spent in factorization, implicit ``Q.T`` application, and
+        backward substitution.  Construction of ``A`` and ``b`` by the
+        caller is excluded.
+
+    Notes
+    -----
+    ``Q`` is not formed.  Factorization costs ``O(rows*m**2)``, applying
+    ``Q.T`` costs ``O(rows*m)``, and back substitution costs ``O(m**2)``.
+    """
     m = A.shape[1]
 
     start = time.perf_counter()
@@ -47,19 +91,27 @@ def naive_qr_solver(A, b):
 
 
 def qr_factorize_naive(A):
-    """
-    Thin QR factorization via Householder reflectors.
-    Compact form: stores vectors u_k and does not form Q.
+    """Compute a compact Householder QR factorization of a tall matrix.
 
     Parameters
-    ---------
-    A : ndarray (rows, cols)  input matrix, rows >= cols
+    ----------
+    A : ndarray, shape (rows, m)
+        Real floating-point matrix with ``rows >= m``.  It is not modified.
 
     Returns
     -------
-    R        : ndarray (cols, cols)     upper triangular matrix R
-    u_list   : list of ndarray          normalized vectors, with
-                                          u_list[k].shape == (rows-k,)
+    R : ndarray, shape (m, m)
+        Upper-triangular factor.  The zero block below ``R`` is omitted.
+    u_list : list of ndarray
+        The ``m`` normalized Householder vectors.  ``u_list[k]`` has shape
+        ``(rows-k,)`` and acts on rows ``k:``.
+
+    Notes
+    -----
+    If ``H_k`` is represented by ``u_list[k]``, the routine computes
+    ``H_(m-1) ... H_0 A = [R; 0]`` without forming ``Q``.  The cost is
+    ``O(rows*m**2)``.  Reflector storage contains
+    ``sum(rows-k, k=0,...,m-1)`` scalars.
     """
 
     # Work on a copy so that the caller's matrix is not modified.
@@ -83,21 +135,27 @@ def qr_factorize_naive(A):
 
 
 def apply_QT(u_list, b):
-    """
-    Apply Q^T without forming Q.
-
-    If the factorization stores H_0, ..., H_{r-1}, then
-    Q^T = H_{r-1} ... H_0.  Consequently, Q^T uses the reflectors in
-    factorization order, whereas Q uses them in reverse order.
+    """Apply ``Q.T`` from compact trailing Householder vectors.
 
     Parameters
-    ---------
-    u_list : list of ndarray   Householder vectors from factorization
-    b      : ndarray           input vector
+    ----------
+    u_list : sequence of ndarray
+        Reflector ``k`` must have shape ``(b.size-k,)`` and acts on
+        ``b[k:]``.  The reflectors must be in factorization order.
+    b : ndarray, shape (rows,)
+        Vector to transform.  It is not modified.
 
     Returns
     -------
-    ndarray        requested orthogonal product
+    result : ndarray, shape (rows,)
+        ``Q.T @ b``.
+
+    Notes
+    -----
+    If ``Q.T = H_(r-1) ... H_0``, sequentially updating a vector with
+    ``H_0, H_1, ..., H_(r-1)`` produces ``Q.T @ b``.  A zero reflector is
+    skipped.  Dimensions are assumed compatible rather than validated.
+    The cost is proportional to the total number of stored entries.
     """
 
     # Applying the stored order gives Q^T; reversing that order gives Q.
@@ -113,17 +171,26 @@ def apply_QT(u_list, b):
 
 
 def back_substitution(R, b):
-    """
-    Solves the upper triangular system R*w = b.
+    """Solve the nonsingular upper-triangular system ``R @ w = b``.
 
     Parameters
-    ---------
-    R : ndarray (m, m)  upper triangular matrix
-    b : ndarray (m,)    right-hand side vector
+    ----------
+    R : ndarray, shape (m, m)
+        Nonsingular upper-triangular coefficient matrix.
+    b : ndarray, shape (m,)
+        Right-hand side.
 
     Returns
     -------
-    w : ndarray (m,)  solution
+    w : ndarray, shape (m,)
+        Solution of the triangular system.
+
+    Notes
+    -----
+    The routine performs ``O(m**2)`` work and allocates ``O(m)`` output
+    storage.  Shapes, triangular structure, finite values, and nonzero
+    pivots are assumed rather than checked; a zero pivot can produce
+    nonfinite values.
     """
     size = R.shape[0]
     w = np.empty(size, dtype=float)
@@ -140,18 +207,33 @@ def back_substitution(R, b):
 
 
 def compute_householder_vector(x):
-    """
-    Computes the Householder vector u such that H*x = s*e_1,
-    where H = I - 2*u*u^T/||u||^2.
+    """Construct a normalized Householder vector for a real column.
 
     Parameters
-    ---------
-    x : ndarray (d,)  input vector
+    ----------
+    x : ndarray, shape (d,)
+        Nonempty real vector.
 
     Returns
     -------
-    u : ndarray (d,)  normalized Householder vector; zero if x is zero
-    alpha : float         -sign(x_0) * ||x||
+    u : ndarray, shape (d,)
+        Normalized reflector vector.  If ``x`` is zero, ``u`` is the zero
+        vector used as an identity-reflector sentinel.
+    alpha : float
+        ``-sign(x[0])*||x||_2``, with sign ``+1`` when ``x[0] >= 0``;
+        zero when ``x`` is zero.
+
+    Notes
+    -----
+    For nonzero ``x``, ``H = I - 2*u*u.T`` satisfies
+    ``H @ x = alpha*e_1``.  The sign choice avoids cancellation in the
+    first component, and the input is scaled before its norm is evaluated
+    to reduce overflow and underflow risk.
+
+    Raises
+    ------
+    ValueError
+        If the recovered norm is not finite.
     """
 
     # Scale first so the norm calculation is robust to very large or small values.
@@ -181,27 +263,43 @@ def compute_householder_vector(x):
 # =============================================================================
 
 def qr_solver_structure_based(X, y, lam):
-    """
-    Solves min_w ||hat_X w - hat_y|| via QR factorization.
+    """Solve the regularized problem with structure-based Householder QR.
 
-    Procedure:
-    1. Permute the augmented system to [lambda*I_m; X^T]
-    2. Factor it while exploiting the diagonal first block
-    3. Compute Q^T * [0; y] implicitly via stored reflectors
-    4. Solve R*w = (Q^T*[0; y])[:m] by back-substitution
-
-    Total cost: O(n*m^2 + m^2), which is quadratic in m for fixed n.
+    The row-permuted augmented matrix ``[lam*I_m; X.T]`` is factorized
+    with ``m`` compact reflectors, each supported on one row of ``R`` and
+    the ``n`` dense data rows.  Their action on ``[0; y]`` is computed
+    implicitly before the triangular solve.
 
     Parameters
-    ---------
-    X   : ndarray (m, n)  data matrix
-    y   : ndarray (n,)    target vector
-    lam : float           regularization parameter
+    ----------
+    X : ndarray, shape (m, n)
+        Real floating-point data matrix.
+    y : ndarray, shape (n,)
+        Right-hand side of the data equations.
+    lam : float
+        Positive regularization parameter.
 
     Returns
     -------
-    w       : ndarray (m,)  solution
-    tot_time : float         execution time (seconds)
+    R : ndarray, shape (m, m)
+        Upper-triangular factor.
+    w : ndarray, shape (m,)
+        Computed regularized least-squares solution.
+    c : ndarray, shape (m+n,)
+        Work vector whose first ``m`` entries are the leading entries of
+        ``Q.T @ [0; y]`` used by the triangular solve.  In the current
+        implementation the final transformed ``n`` entries are not copied
+        back, so ``c[m:]`` remains equal to ``y``.
+    reflectors : list of ndarray
+        The ``m`` normalized compact reflectors, each of shape ``(n+1,)``.
+    tot_time : float
+        Seconds spent in factorization, compact right-hand-side
+        transformation, and backward substitution.  Construction of
+        ``[0; y]`` is excluded.
+
+    Notes
+    -----
+    The total cost is ``O(n*m**2 + m**2)``.  ``Q`` is not formed.
     """
     m = X.shape[0]
     b_perm = np.concatenate((np.zeros(m), y))
@@ -217,11 +315,32 @@ def qr_solver_structure_based(X, y, lam):
 
 
 def qr_factorize_structure_based(X, lam):
-    """
-    Factor [lam*I_m; X^T] while exploiting the zeros in the identity block.
+    """Factor ``[lam*I_m; X.T]`` using its diagonal/dense block structure.
 
-    Each stored vector contains only its nonzero entries: one entry for the
-    active row of R and n entries for the dense data rows.
+    Parameters
+    ----------
+    X : ndarray, shape (m, n)
+        Real floating-point data matrix.  It is not modified.
+    lam : float
+        Positive regularization parameter.
+
+    Returns
+    -------
+    R : ndarray, shape (m, m)
+        Upper-triangular factor.
+    u_list : list of ndarray
+        The ``m`` normalized compact Householder vectors.  Each has shape
+        ``(n+1,)`` and represents a reflector acting on row ``k`` of ``R``
+        together with all ``n`` dense rows.
+
+    Notes
+    -----
+    The routine starts from ``R = lam*I_m`` and an internal copy of
+    ``X.T``.  At step ``k`` it eliminates the ``n`` dense entries in
+    column ``k`` and updates columns ``k:``.  Its arithmetic cost is
+    ``O(n*m**2 + m**2)`` and reflector storage is ``O(n*m)``.  Because the
+    internal copy retains the dtype of ``X``, floating-point input is
+    required for reliable in-place updates.
     """
     m, n = X.shape
     R = lam * np.eye(m)
@@ -256,7 +375,32 @@ def qr_factorize_structure_based(X, lam):
 
 
 def apply_structure_based_QT(u_list, b_perm, m):
-    """Apply the compact reflectors for [lam*I_m; X^T] to b_perm."""
+    """Apply structure-based reflectors to a permuted right-hand side.
+
+    Parameters
+    ----------
+    u_list : sequence of ndarray
+        Compact reflectors of shape ``(n+1,)``, in factorization order.
+    b_perm : ndarray, shape (m+n,)
+        Permuted right-hand side, normally ``[0; y]``.  It is not modified.
+    m : int
+        Size of the triangular block and number of leading coordinates.
+
+    Returns
+    -------
+    c : ndarray, shape (m+n,)
+        Copy of ``b_perm`` whose first ``m`` entries equal the leading
+        entries of ``Q.T @ b_perm``.  The current work-buffer update does
+        not copy the final transformed lower part into ``c``; consequently
+        ``c[m:]`` remains equal to ``b_perm[m:]`` and must not be interpreted
+        as the lower part of the complete orthogonal product.
+
+    Notes
+    -----
+    Reflector ``k`` acts on the full-system coordinates ``k`` and ``m:``.
+    The method costs ``O(m*n)`` and does not form ``Q``.  Input dimensions
+    are assumed compatible rather than validated.
+    """
     c = b_perm.copy()
     y_transformed = c[m:]
 
@@ -288,7 +432,40 @@ def apply_structure_based_QT(u_list, b_perm, m):
 # =============================================================================
 
 def qr_solver_row_insertion(X, y, lam):
-    """Solve the project problem with the report's structured QR algorithm."""
+    """Run the two-dimensional Householder row-insertion solver.
+
+    Parameters
+    ----------
+    X : ndarray, shape (m, n)
+        Real floating-point data matrix.
+    y : ndarray, shape (n,)
+        Right-hand side of the data equations.
+    lam : float
+        Positive regularization parameter.
+
+    Returns
+    -------
+    R : ndarray, shape (m, m)
+        Upper-triangular matrix produced by the row-insertion updates.
+    w : ndarray, shape (m,)
+        Output of backward substitution with ``R`` and ``c``.
+    c : ndarray, shape (m,)
+        Leading transformed right-hand side accumulated during insertion.
+    reflectors : list of tuple
+        The ``n*m`` triples ``(top_row, data_row, [u1, u2])`` stored in
+        insertion order.
+    tot_time : float
+        Seconds spent in row insertion, fused right-hand-side updates,
+        reflector storage, and backward substitution.
+
+    Notes
+    -----
+    The intended algorithm costs ``O(n*m**2 + m**2)`` and does not form
+    ``Q``.  The current factorization routine overwrites the prescribed
+    diagonal and eliminated entry during each tail update; therefore its
+    output is experimental and is not guaranteed to be a valid QR factor
+    or least-squares solution.
+    """
     start = time.perf_counter()
 
     R, c, reflectors = qr_factorize_row_insertion_2d(X, lam, y, store_reflectors=True)
@@ -299,7 +476,47 @@ def qr_solver_row_insertion(X, y, lam):
 
 
 def qr_factorize_row_insertion_2d(X, lam, y, store_reflectors=True):
-    """Run row insertion, optionally transforming its right-hand side."""
+    """Insert the rows of ``X.T`` with two-dimensional Householder updates.
+
+    Starting from ``R = lam*I_m``, each data row is swept from left to
+    right.  At position ``(i, k)``, one reflector acts on row ``k`` of
+    ``R`` and on the inserted row; the same reflector is applied immediately
+    to the pair ``(c[k], y[i])``.
+
+    Parameters
+    ----------
+    X : ndarray, shape (m, n)
+        Real floating-point data matrix.  It is not modified.
+    lam : float
+        Positive regularization parameter.
+    y : ndarray, shape (n,)
+        Data right-hand side transformed during insertion.
+    store_reflectors : bool, default=True
+        Store every two-dimensional reflector when true.  This flag does
+        not control the fused right-hand-side transformation, which is
+        always performed.
+
+    Returns
+    -------
+    R : ndarray, shape (m, m)
+        Upper-triangular matrix produced by the row updates.
+    c : ndarray, shape (m,)
+        Leading transformed right-hand side used by back substitution.
+    reflectors : list of tuple or None
+        When requested, ``n*m`` triples ``(k, m+i, [u1, u2])`` in
+        factorization order; otherwise ``None``.
+
+    Notes
+    -----
+    The intended arithmetic cost is ``O(n*m**2 + m**2)``.  Storing the
+    reflectors uses ``O(n*m)`` additional entries and Python objects;
+    disabling storage leaves ``O(m)`` workspace beyond ``R``.
+
+    In the current update order, ``R[k, k] = alpha`` and ``row[k] = 0``
+    are assigned before subtracting from slices that still include index
+    ``k``.  Those structural values are consequently overwritten, so the
+    returned matrix is not guaranteed to be the intended QR factor.
+    """
     m, n = X.shape
     R = lam * np.eye(m)
     c = np.zeros(m)
@@ -335,7 +552,30 @@ def qr_factorize_row_insertion_2d(X, lam, y, store_reflectors=True):
 
 
 def compute_householder_vector_2d(v1: float, v2: float):
-    """Return the normalized Householder vector for a two-entry column."""
+    """Construct a normalized Householder vector for a two-entry column.
+
+    Parameters
+    ----------
+    v1, v2 : float
+        Finite real entries of the active column.
+
+    Returns
+    -------
+    u1, u2 : float
+        Components of the normalized reflector vector.  Both are zero for
+        the zero input, denoting an identity-reflector sentinel.
+    alpha : float
+        ``-sign(v1)*sqrt(v1**2 + v2**2)``, using sign ``+1`` when
+        ``v1 >= 0``; zero for the zero input.
+
+    Notes
+    -----
+    For nonzero input, let ``u = [u1, u2].T``.  Then
+    ``H = I - 2*u*u.T`` maps ``[v1, v2].T`` to ``[alpha, 0].T``.  Scaling
+    precedes the norm calculation to reduce overflow and underflow risk.
+    Nonfinite inputs and a recovered norm outside the floating-point range
+    are not explicitly rejected.
+    """
     scale = max(abs(v1), abs(v2))
     if scale == 0.0:
         return 0.0, 0.0, 0.0
