@@ -1,0 +1,648 @@
+% ═════════════════════════════════════════════════════════════
+% A1 — Limited-Memory BFGS (L-BFGS)
+\label{sec:lbfgs}
+% ═════════════════════════════════════════════════════════════
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Quasi-Newton Methods: Background}
+% ─────────────────────────────────────────────────────────────
+
+\noindent Quasi-Newton methods are iterative algorithms for unconstrained
+optimization that approximate the Newton direction without explicitly computing
+the true Hessian matrix~\cite{nocedal2006numerical}. Recall that the pure Newton
+step would be $p_k = -[\nabla^2 f(w_k)]^{-1} \nabla f(w_k)$: it accounts for
+the local curvature and converges quadratically near the solution, but requires
+computing and factorizing an $m \times m$ matrix at every iteration, which costs
+$O(m^3)$ and is infeasible for large $m$. Quasi-Newton methods replace the true
+inverse Hessian with an approximation $H_k \approx [\nabla^2 f(w_k)]^{-1}$ that
+is built cheaply from first-order information only. The search direction is then:
+\begin{equation}
+\label{eq:qn_direction}
+    p_k = -H_k \nabla f(w_k),
+\end{equation}
+and the iterate is updated as $w_{k+1} = w_k + \alpha_k p_k$, where $\alpha_k > 0$
+is the step length determined by a line search.
+
+\paragraph{The secant equation.}
+After each step, the algorithm observes two key vectors: the parameter displacement
+$s_k = w_{k+1} - w_k$ and the gradient difference
+$y_k = \nabla f(w_{k+1}) - \nabla f(w_k)$. These encode curvature information:
+in one dimension, the second derivative can be approximated as
+$f''(x) \approx \Delta f' / \Delta x = y_k / s_k$. In $\mathbb{R}^m$, this
+generalizes to the requirement that the new approximation $H_{k+1}$ maps the
+gradient change $y_k$ to the step $s_k$, exactly as the true inverse Hessian
+would near a quadratic:
+\begin{equation}
+\label{eq:secant}
+    H_{k+1}\, y_k = s_k.
+\end{equation}
+This is called the \emph{secant condition}. Geometrically, it forces $H_{k+1}$
+to reproduce the correct curvature along the direction just explored. However,
+in dimension $m > 1$, equation~\eqref{eq:secant} has infinitely many solutions:
+it constrains $H_{k+1}$ only along $y_k$, leaving all orthogonal directions
+undetermined.
+
+\paragraph{The BFGS update.}
+The BFGS method resolves the non-uniqueness by solving a
+constrained optimization problem: among all symmetric positive definite matrices
+satisfying the secant condition, find the one closest to the previous
+approximation $H_k$ in a weighted Frobenius norm. This \emph{minimal-change}
+principle ensures that information accumulated in $H_k$ is preserved as much as
+possible, and only updated in the directions where new curvature has been
+observed. The unique solution is:
+\begin{equation}
+\label{eq:bfgs}
+    H_{k+1} = V_k^T H_k V_k + \rho_k s_k s_k^T,
+\end{equation}
+where
+\begin{equation}
+    \rho_k = \frac{1}{y_k^T s_k}, \qquad V_k = I - \rho_k y_k s_k^T.
+\end{equation}
+
+\noindent The structure of this update is highly deliberate. The scalar $\rho_k$
+normalizes the curvature so that $\rho_k(s_k^T y_k) = 1$. The matrix $V_k$ acts
+as a projector that annihilates $y_k$: since $V_k y_k = y_k - \rho_k y_k
+(s_k^T y_k) = y_k - y_k = 0$, the first term in~\eqref{eq:bfgs} contributes
+nothing along $y_k$. The second term $\rho_k s_k s_k^T$ then injects precisely
+the curvature needed to satisfy the secant condition. Indeed, multiplying
+\eqref{eq:bfgs} by $y_k$:
+\begin{equation}
+    H_{k+1} y_k
+    = V_k^T H_k \underbrace{(V_k y_k)}_{=\,0}
+      + \rho_k s_k \underbrace{(s_k^T y_k)}_{=\,1/\rho_k}
+    = s_k. \checkmark
+\end{equation}
+
+\noindent While BFGS achieves superlinear convergence on strongly convex problems,
+it has a fundamental limitation: after $k$ iterations, $H_k$ is a dense
+$m \times m$ matrix. Storing it requires $O(m^2)$ memory, and updating it via
+formula~\eqref{eq:bfgs} costs $O(m^2)$ per iteration. For large $m$, both
+become prohibitive.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{The L-BFGS Algorithm}
+% ─────────────────────────────────────────────────────────────
+
+\noindent The Limited-Memory BFGS (L-BFGS) method addresses
+the memory limitation with a key observation: we never need to \emph{store} $H_k$
+explicitly. What we actually need at each iteration is the matrix-vector product
+$H_k \nabla f_k$. If we expand the BFGS recurrence~\eqref{eq:bfgs} backwards
+over the last $\bar{m}$ steps, starting from an initial approximation
+$H_k^0 = \gamma_k I$, the product $H_k \nabla f_k$ can be expressed as a
+sequence of inner products and vector additions involving only the stored pairs
+$\{s_i, y_i\}_{i=k-\bar{m}}^{k-1}$. This leads to the \emph{two-loop recursion}
+(Algorithm~\ref{alg:twoloop}), which computes $H_k \nabla f_k$ implicitly in
+$O(\bar{m}\,m)$ operations, without ever forming or storing $H_k$.
+
+\noindent In practice, $\bar{m} \in [3, 20]$ pairs are retained: Nocedal and
+Wright~\cite[Section~9.1]{nocedal2006numerical} note that modest values of
+$\bar{m}$ often give satisfactory results, since curvature information from
+earlier iterations becomes increasingly irrelevant as the iterates move away from
+those regions. At each iteration, the oldest pair is discarded and the newest
+pair $(s_k, y_k)$ is added.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsubsection{Initial Scaling of \texorpdfstring{$H_k^0$}{H0}}
+\label{sec:h0_scaling}
+% ─────────────────────────────────────────────────────────────
+
+\noindent At each iteration, the initial Hessian approximation is set to
+$H_k^0 = \gamma_k I$ for some scalar $\gamma_k > 0$. Conceptually, this is the
+``blank slate'' from which the two-loop recursion builds $H_k$ by applying the
+last $\bar{m}$ BFGS updates. The choice of $\gamma_k$ matters: if it is too
+small, the search direction $p_k$ will be short and many small steps will be
+needed; if it is too large, the algorithm will overshoot. We implement three
+strategies.
+
+% \paragraph{Nocedal scaling (BB2).}
+% The default choice~\cite[Eq.~9.6]{nocedal2006numerical} is
+% \begin{equation}
+% \label{eq:gamma_nocedal}
+%     \gamma_k^{\mathrm{N}} = \frac{s_{k-1}^T y_{k-1}}{y_{k-1}^T y_{k-1}}.
+% \end{equation}
+% This is the scalar $\gamma$ that minimises $\|\gamma y_{k-1} - s_{k-1}\|$,
+% i.e.\ the best scalar approximation to the inverse Hessian along the most recent
+% step direction $s_{k-1}$. It ensures that the search direction $p_k$ is
+% well-scaled and that the unit step length $\alpha_k = 1$ is accepted in most
+% Wolfe line-search iterations. This choice coincides with the BB2 step of
+% Barzilai and Borwein~\cite{barzilai1988}.
+
+
+\paragraph{Nocedal scaling (BB2).}
+The default choice~\cite[Eq.~9.6]{nocedal2006numerical} is
+\begin{equation}
+\label{eq:gamma_nocedal}
+    \gamma_k^{\mathrm{N}} = \frac{s_{k-1}^T y_{k-1}}{y_{k-1}^T y_{k-1}}.
+\end{equation}
+This is the unique minimiser of $\|\gamma\, y_{k-1} - s_{k-1}\|^2$ over
+$\gamma > 0$, i.e.\ the best scalar approximation to the inverse Hessian along
+$s_{k-1}$ in a least-squares sense: $\gamma^{\mathrm{N}}_k$ is the scalar $\gamma$
+such that $\gamma y_{k-1} \approx s_{k-1}$, mimicking the secant condition
+$H_k^{-1} y_{k-1} = s_{k-1}$.
+It ensures that the search direction $p_k$ is well-scaled and that the unit step
+length $\alpha_k = 1$ is accepted in most Wolfe line-search iterations.
+We note that this formula is algebraically identical to the \emph{BB2} step size
+of Barzilai and Borwein~\cite[Eq.~(5)]{barzilai1988}, which was derived
+independently in the context of gradient descent by solving the same
+least-squares approximation to the secant equation, with
+$\Delta x \leftrightarrow s_{k-1}$ and $\Delta g \leftrightarrow y_{k-1}$.
+This observation motivates us to also consider the companion BB1 step as an
+alternative scaling strategy for $H_k^0$.
+
+\paragraph{BB1 scaling.}
+The companion step size proposed by Barzilai and Borwein~\cite[Eq.~(6)]{barzilai1988} is
+\begin{equation}
+\label{eq:gamma_bb1}
+    \gamma_k^{\mathrm{BB1}} = \frac{s_{k-1}^T s_{k-1}}{s_{k-1}^T y_{k-1}}.
+\end{equation}
+This is the minimiser of $\|\gamma^{-1} s_{k-1} - y_{k-1}\|^2$, i.e.\ the
+scalar $\gamma$ such that $\gamma^{-1} s_{k-1} \approx y_{k-1} \approx H\, s_{k-1}$,
+yielding an estimate of the \emph{average} eigenvalue of $\nabla^2 f$ (rather
+than its inverse). On ill-conditioned problems, BB1 tends to produce larger steps
+than BB2, which can accelerate convergence by escaping flat regions more quickly.
+
+% \paragraph{Safeguarded BB2.}
+% Following Dai and Liao~\cite{dai2002}, we also provide a clipped variant:
+% \begin{equation}
+% \label{eq:gamma_safe}
+%     \gamma_k^{\mathrm{safe}} = \mathrm{clip}\!\left(
+%         \gamma_k^{\mathrm{N}},\; \gamma_{\min},\; \gamma_{\max}
+%     \right),
+% \end{equation}
+% with defaults $\gamma_{\min} = 10^{-10}$ and $\gamma_{\max} = 10^{10}$.
+% Near the solution, $y_{k-1}^T y_{k-1}$ can become extremely small (the gradient
+% barely changes between steps), making $\gamma_k^{\mathrm{N}}$ blow up and
+% rendering the direction $p_k$ unreliable. The clipping prevents this numerical
+% instability while retaining the BB2 estimate in the well-behaved regime.
+
+
+\paragraph{Safeguarded BB2.}
+The Nocedal scaling~\eqref{eq:gamma_nocedal} can become numerically unreliable near the 
+solution: as $w_k \to w^*$, the gradient changes between successive 
+iterates vanish, so $y_{k-1}^T y_{k-1} \to 0$ while $s_{k-1}^T y_{k-1}$ 
+remains bounded away from zero, causing $\gamma_k^{\mathrm{N}} \to \infty$.
+An unbounded scaling factor renders the search direction $p_k$ unreliable 
+regardless of the quality of the two-loop recursion. To prevent this, we 
+clip the scaling factor to a finite interval:
+\begin{equation}
+\label{eq:gamma_safe}
+    \gamma_k^{\mathrm{safe}} = \mathrm{clip}\!\left(
+        \gamma_k^{\mathrm{N}},\; \gamma_{\min},\; \gamma_{\max}
+    \right),
+\end{equation}
+with defaults $\gamma_{\min} = 10^{-10}$ and $\gamma_{\max} = 10^{10}$.
+This retains the BB2 estimate in the well-behaved regime while preventing 
+numerical overflow in degenerate cases.
+
+% ─────────────────────────────────────────────────────────────
+\subsubsection{Two-Loop Recursion}
+% ─────────────────────────────────────────────────────────────
+
+\noindent The product $r = H_k \nabla f_k$ is computed by
+Algorithm~\ref{alg:twoloop}~\cite[Algorithm~9.1]{nocedal2006numerical}. The
+algorithm implements the BFGS recurrence~\eqref{eq:bfgs} unrolled over the last
+$\bar{m}$ pairs, applied implicitly to the gradient vector $q$. The
+\emph{backward loop} computes the $\alpha_i$ scalars that will be needed later,
+while simultaneously applying the $V_i^T$ factors to $q$ from right to left. The
+\emph{scaling step} applies the base approximation $H_k^0 = \gamma_k I$. The
+\emph{forward loop} then applies the rank-one corrections $\rho_i s_i s_i^T$,
+using the $\alpha_i$ computed in the backward pass. Together, the two loops
+implement exactly the product $H_k q$ without ever constructing the matrix.
+
+\begin{algorithm}[H]
+\caption{L-BFGS Two-Loop
+  Recursion~\cite[Algorithm~9.1]{nocedal2006numerical}}
+\label{alg:twoloop}
+\begin{algorithmic}[1]
+    \Require Gradient $q \gets \nabla f_k$;\;
+             stored pairs $\{s_i, y_i\}_{i=k-\bar{m}}^{k-1}$;\;
+             scaling $\gamma_k$
+    \Ensure  $r = H_k \nabla f_k$
+    \For{$i = k-1,\, k-2,\, \ldots,\, k-\bar{m}$}
+        \State $\rho_i \gets 1/(y_i^T s_i)$;\quad
+               $\alpha_i \gets \rho_i\, s_i^T q$;\quad
+               $q \gets q - \alpha_i\, y_i$
+        \Comment{Apply $V_i^T$ to $q$}
+    \EndFor
+    \State $r \gets \gamma_k\, q$
+           \Comment{Apply $H_k^0 = \gamma_k I$}
+    \For{$i = k-\bar{m},\, \ldots,\, k-1$}
+        \State $\beta \gets \rho_i\, y_i^T r$;\quad
+               $r \gets r + s_i\,(\alpha_i - \beta)$
+        \Comment{Apply rank-one correction}
+    \EndFor
+    \State \Return $r$
+\end{algorithmic}
+\end{algorithm}
+
+\noindent The cost of Algorithm~\ref{alg:twoloop} is $4\bar{m}$ dot products of
+length $m$ (two in each loop iteration) plus $m$ multiplications for the scaling
+step, totalling $(4\bar{m}+1)\,m$ floating-point operations. This is a dramatic
+improvement over the $O(m^2)$ cost of storing and applying the full BFGS matrix.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsubsection{Curvature Safeguard and Automatic Restart}
+\label{sec:restart}
+% ─────────────────────────────────────────────────────────────
+
+\noindent For the BFGS formula~\eqref{eq:bfgs} to produce a positive definite
+update, the \emph{curvature condition} $y_k^T s_k > 0$ must hold. To see why,
+note that $\rho_k = 1/(y_k^T s_k)$ appears in the rank-one term
+$\rho_k s_k s_k^T$: if $y_k^T s_k \leq 0$, then $\rho_k \leq 0$ and the update
+would subtract from $H_k$, potentially making $H_{k+1}$ indefinite and the
+next direction $p_{k+1}$ a direction of ascent. We implement two levels of
+protection against this.
+
+% \paragraph{Negative-curvature reset.}
+% If $y_k^T s_k \leq 10^{-16}$, the entire stored memory is cleared and the
+% algorithm restarts from a pure gradient-descent step (effectively setting
+% $H_k = I$). This is the standard safeguard described in~\cite{liu1989limited}.
+
+% \paragraph{Curvature-based restart.}
+% A more anticipatory criterion is proposed in~\cite[Section~4]{liu1989limited}:
+% even when $y_k^T s_k > 0$, the memory should be cleared if the curvature
+% estimate captured by the new pair changes dramatically relative to the previous
+% one. To detect this, we track the quantity
+% \begin{equation}
+% \label{eq:gamma_restart}
+%     \gamma_k = \frac{y_k^T s_k}{y_k^T y_k},
+% \end{equation}
+% which is the same as the Nocedal scaling~\eqref{eq:gamma_nocedal}: it estimates
+% the effective inverse-Hessian scale along $s_k$. A sudden drop,
+% \begin{equation}
+% \label{eq:restart_cond}
+%     \gamma_k < \xi\, \gamma_{k-1}, \qquad \xi \in (0,1),
+% \end{equation}
+% signals that the curvature along the new step is much smaller than along the
+% previous one. This typically happens when the iterates have moved into a
+% qualitatively different region of the landscape: the pairs stored in memory
+% were computed under a different curvature regime and now give a misleading
+% approximation of $H_k^{-1}$. Clearing the memory and restarting from
+% $H_k^0 = \gamma_k I$ is then preferable to letting corrupted pairs contaminate
+% the two-loop recursion. The threshold $\xi = 0.2$ is used by default.
+
+\paragraph{Negative-curvature reset.}
+If $y_k^T s_k \leq 10^{-16}$, the entire stored memory is cleared and the
+algorithm restarts from a pure gradient-descent step (effectively setting
+$H_k = I$). This safeguard ensures that $\rho_k = 1/(y_k^T s_k)$ remains
+well-defined and positive, as required by the BFGS update~\eqref{eq:bfgs}.
+The threshold $10^{-16}$ corresponds to the unit roundoff in
+double precision arithmetic, below which $\rho_k$ is no longer numerically
+reliable.
+
+\paragraph{Curvature-based restart.}
+As an additional safeguard, we clear the memory even when $y_k^T s_k > 0$
+if the curvature estimate captured by the new pair changes dramatically
+relative to the previous one. To detect this, we track the quantity
+\begin{equation}
+\label{eq:gamma_restart}
+    \gamma_k = \frac{y_k^T s_k}{y_k^T y_k},
+\end{equation}
+which is the same as the Nocedal scaling~\eqref{eq:gamma_nocedal}: it estimates
+the effective inverse-Hessian scale along $s_k$. A sudden drop,
+\begin{equation}
+\label{eq:restart_cond}
+    \gamma_k < \xi\, \gamma_{k-1}, \qquad \xi \in (0,1),
+\end{equation}
+signals that the curvature along the new step is much smaller than along the
+previous one. This typically happens when the iterates have moved into a
+qualitatively different region of the landscape: the pairs stored in memory
+were computed under a different curvature regime and now give a misleading
+approximation of $H_k^{-1}$. Clearing the memory and restarting from
+$H_k^0 = \gamma_k I$ is then preferable to letting corrupted pairs contaminate
+the two-loop recursion. The threshold $\xi = 0.2$ is used by default.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Line Search Strategies}
+\label{sec:linesearch}
+% ─────────────────────────────────────────────────────────────
+
+\subsubsection{Strong Wolfe Conditions}
+
+\noindent Once the descent direction $p_k$ is computed, the step length $\alpha_k$
+must be chosen to make sufficient progress without overshoot. The standard
+criterion for quasi-Newton methods is the \emph{strong Wolfe
+conditions}~\cite[Eq.~3.7]{nocedal2006numerical}:
+\begin{align}
+    f(w_k + \alpha_k p_k)
+        &\leq f(w_k) + c_1\,\alpha_k\,\nabla f_k^T p_k,
+    \label{eq:armijo} \\
+    \left|\nabla f(w_k + \alpha_k p_k)^T p_k\right|
+        &\leq c_2\,\left|\nabla f_k^T p_k\right|.
+    \label{eq:curvature}
+\end{align}
+Condition~\eqref{eq:armijo} (Armijo) ensures sufficient decrease: the function
+must drop by at least a fraction $c_1$ of the directional derivative. Without
+it, the algorithm might take steps so small that progress is negligible.
+Condition~\eqref{eq:curvature} prevents the step from being too short: the
+directional derivative at the new point must be small enough in absolute value,
+which ensures that the new pair $(s_k, y_k)$ carries meaningful curvature
+information (in particular, it guarantees $y_k^T s_k > 0$).
+Following standard practice for quasi-Newton
+methods~\cite{nocedal2006numerical}, we set $c_1 = 10^{-4}$ and $c_2 = 0.9$.
+Our implementation uses a bracketing-and-zoom procedure with cubic
+interpolation~\cite[Section~3.5]{nocedal2006numerical}.
+
+
+\subsubsection{Exact Line Search for Quadratic Objectives}
+\label{sec:exact_ls}
+
+\noindent The Wolfe conditions are designed for general nonlinear objectives and
+accept a range of step lengths rather than requiring the exact minimiser. For our
+quadratic $f$, we can do much better. The restriction of $f$ along any direction
+$p$ is a one-dimensional parabola:
+\begin{equation}
+\label{eq:phi_parabola}
+    \varphi(\alpha) = f(w + \alpha\,p)
+    = f(w) + \alpha\,\nabla f(w)^T p + \frac{\alpha^2}{2}\,p^T H p.
+\end{equation}
+Since $H \succ 0$, the coefficient $p^T H p > 0$ for all $p \neq 0$, so
+$\varphi$ is a strictly convex parabola with a unique global minimum at
+$\varphi'(\alpha^*) = 0$, i.e.:
+\begin{equation}
+\label{eq:exact_alpha}
+    \alpha^* = -\frac{\nabla f(w)^T p}{\,p^T H p\,}.
+\end{equation}
+For our specific Hessian $H = XX^T + \lambda^2 I_m$, the denominator can be
+expanded without forming $H$ explicitly:
+\begin{equation}
+    p^T H p = p^T (XX^T + \lambda^2 I_m)\,p
+    = \norm{X^T p}^2 + \lambda^2\norm{p}^2,
+\end{equation}
+so the complete formula becomes a generalisation
+of~\cite[Eq.~3.25]{nocedal2006numerical} to an arbitrary descent direction:
+\begin{equation}
+\label{eq:exact_alpha_expanded}
+    \alpha^* = -\frac{\nabla f(w)^T p}{\norm{X^T p}^2 + \lambda^2\norm{p}^2}.
+\end{equation}
+The only non-trivial cost is the single matrix-vector product $X^T p \in O(mn)$,
+identical to the cost of one gradient evaluation, and far cheaper than the
+multiple function and gradient evaluations required by the Wolfe bracketing
+procedure. Since $\alpha^*$ is the \emph{exact} minimiser of $\varphi$, it fully
+exploits the parabolic structure and yields the best possible step at each
+iteration, reducing the number of iterations required to reach a given
+accuracy compared to the Wolfe variant.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Complete Algorithm}
+% ─────────────────────────────────────────────────────────────
+
+\begin{algorithm}[H]
+\caption{Enhanced L-BFGS~\cite[Algorithm~9.2]{nocedal2006numerical}}
+\label{alg:lbfgs}
+\begin{algorithmic}[1]
+    \Require Starting point $w_0$; memory $\bar{m}$; tolerance $\varepsilon$;
+             scaling strategy $\in \{\mathrm{BB2},\,\mathrm{BB1},\,\mathrm{safe}\}$;
+             restart flag; restart threshold $\xi$
+    \State $k \gets 0$;\; compute $\nabla f_0$;\;
+           $\tau \gets \varepsilon\,\|\nabla f_0\|$;\;
+           $\gamma_{\mathrm{prev}} \gets 1$
+    \While{$\|\nabla f_k\| > \tau$}
+        \State Compute $\gamma_k$ via chosen scaling strategy
+               (Eq.~\eqref{eq:gamma_nocedal},~\eqref{eq:gamma_bb1},
+               or~\eqref{eq:gamma_safe})
+        \State $p_k \gets -H_k \nabla f_k$
+               \Comment{Via Algorithm~\ref{alg:twoloop} with $H_k^0 = \gamma_k I$}
+        \If{$\nabla f_k^T p_k \geq 0$}
+            \State $p_k \gets -\nabla f_k$
+            \Comment{Descent safeguard: fall back to steepest descent}
+        \EndIf
+        \State Compute $\alpha_k$ via exact LS~\eqref{eq:exact_alpha_expanded}
+               or Wolfe conditions~\eqref{eq:armijo}--\eqref{eq:curvature}
+        \State $w_{k+1} \gets w_k + \alpha_k p_k$;\quad
+               $s_k \gets \alpha_k p_k$;\quad
+               $y_k \gets \nabla f_{k+1} - \nabla f_k$
+
+        \State $\gamma_k \gets (y_k^T s_k)/(y_k^T y_k)$
+        \If{$y_k^T s_k > 10^{-10}$}
+            \If{restart enabled \textbf{and}
+                $\gamma_k < \xi\,\gamma_{\mathrm{prev}}$}
+                \State Clear all stored pairs
+                \Comment{Curvature-based restart, Eq.~\eqref{eq:restart_cond}}
+            \EndIf
+            \State Store $(s_k, y_k)$;\; discard oldest if
+                   $\#\text{stored} > \bar{m}$;\;
+                   $\gamma_{\mathrm{prev}} \gets \gamma_k$
+                   
+        \algstore{lbfgs_break}       
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[H]
+\label{alg:lbfgs_part2}
+\begin{algorithmic}[1]
+        \algrestore{lbfgs_break}
+    
+        \ElsIf{$y_k^T s_k \leq 10^{-16}$}
+            \State Clear all stored pairs
+            \Comment{Negative-curvature reset}
+        \Else
+            \State Discard $(s_k, y_k)$
+            \Comment{Curvature too small to be reliable; pair skipped}
+        \EndIf
+        \State $k \gets k + 1$
+    \EndWhile
+    \State \Return $w_k$
+\end{algorithmic}
+\end{algorithm}
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Stopping Criterion}
+\label{sec:stopping}
+% ─────────────────────────────────────────────────────────────
+
+\noindent The primary stopping criterion uses a \emph{relative} gradient tolerance:
+\begin{equation}
+\label{eq:stop_rel}
+    \|\nabla f(w_k)\| \leq \varepsilon \cdot \|\nabla f(w_0)\|.
+\end{equation}
+The relative form is preferred over an absolute threshold $\|\nabla f(w_k)\| \leq
+\varepsilon$ because it is scale-invariant: the magnitude of $\nabla f$ depends
+on the problem scale (and in particular on $\lambda$), so an absolute threshold
+that is appropriate for one value of $\lambda$ may be either too loose or too
+tight for another. Dividing by $\|\nabla f(w_0)\|$ normalizes for this effect.
+
+\noindent As a secondary safeguard, the algorithm detects \emph{numerical
+stagnation}: if the relative change $|f_k - f_{k-1}|/|f_k|$ drops below machine
+epsilon (approximately $10^{-16}$) while the step length $\alpha_k \approx 0$,
+further progress is impossible due to floating-point limitations, and the
+iteration is terminated early.
+
+
+% % ─────────────────────────────────────────────────────────────
+% \subsection{Computational Complexity}
+% \label{sec:complexity}
+% % ─────────────────────────────────────────────────────────────
+
+% \noindent Table~\ref{tab:flops} breaks down the dominant floating-point operations
+% per iteration, derived directly from the structure of
+% Algorithm~\ref{alg:twoloop} and the quadratic objective. Throughout, we assume
+% the exact line search is used, which requires a single $X^T p$ product.
+
+% \begin{table}[h]
+% \centering
+% \caption{Flop budget per L-BFGS iteration (exact line search).}
+% \label{tab:flops}
+% \begin{tabular}{llr}
+%     \toprule
+%     \textbf{Operation}          & \textbf{Asymptotic cost} & \textbf{Exact count} \\
+%     \midrule
+%     Gradient evaluation         & $O(mn)$              & $2mn$ \\
+%     Two-loop recursion          & $O(\bar{m}\,m)$      & $(4\bar{m}+1)\,m$ \\
+%     Exact line search ($X^Tp$)  & $O(mn)$              & $mn + 2m$ \\
+%     Pair update ($s_k,\,y_k$)   & $O(m)$               & $2m$ \\
+%     \midrule
+%     \textbf{Total per iteration}& $O(mn + \bar{m}\,m)$ & $m(4\bar{m} + 3n + 5)$ \\
+%     \bottomrule
+% \end{tabular}
+% \end{table}
+
+% \noindent The memory requirement for the stored pairs is $(2\bar{m}+4)\,m$
+% floating-point numbers: $2\bar{m}$ vectors of length $m$ for the pairs
+% $\{s_i, y_i\}$, plus four more for the current $w$, $\nabla f$, $s_k$, $y_k$.
+% Table~\ref{tab:cost_mem} quantifies cost and storage for the ML-CUP problem.
+
+% \begin{table}[h]
+% \centering
+% \caption{Theoretical cost and storage as a function of memory size
+%   ($m=500$, $n=12$, $K=50$ iterations).}
+% \label{tab:cost_mem}
+% \begin{tabular}{rrrr}
+%     \toprule
+%     $\bar{m}$ & \textbf{Flops/iter} & \textbf{Total flops} ($K=50$)
+%               & \textbf{Storage (MB)} \\
+%     \midrule
+%      3  &  26{,}500 &  1{,}325{,}000 & 0.040 \\
+%      5  &  30{,}500 &  1{,}525{,}000 & 0.056 \\
+%     10  &  40{,}500 &  2{,}025{,}000 & 0.096 \\
+%     20  &  60{,}500 &  3{,}025{,}000 & 0.176 \\
+%     40  & 100{,}500 &  5{,}025{,}000 & 0.336 \\
+%     \bottomrule
+% \end{tabular}
+% \end{table}
+
+% \noindent Two observations stand out. First, the total cost scales \emph{linearly}
+% in $\bar{m}$: doubling the memory doubles the per-iteration cost, but also
+% potentially halves the number of iterations required (up to the saturation
+% point discussed in Section~\ref{sec:memory_effect}). Second, even at
+% $\bar{m} = 40$, the storage for the ML-CUP problem ($m = 500$) is less than
+% $0.4$\,MB, negligible compared to the $O(m^2) = 2$\,MB required by full BFGS.
+% This contrast becomes even more striking in high-dimensional problems: for
+% $m = 10^5$, full BFGS would require ${\sim}80$\,GB, while L-BFGS with
+% $\bar{m} = 10$ needs only ${\sim}16$\,MB.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Convergence Analysis}
+\label{sec:convergence}
+% ─────────────────────────────────────────────────────────────
+
+\subsubsection{Global Linear Convergence}
+
+\noindent The convergence of L-BFGS on our problem follows
+from~\cite[Theorem~7.1]{liu1989limited}. That theorem requires three conditions,
+which we verify directly using the properties established in
+Section~\ref{sec:properties}:
+\begin{enumerate}[nosep]
+    \item $f \in C^2$: satisfied, since $f$ is quadratic;
+    \item the sublevel set $\mathcal{L}_0 = \{w : f(w) \leq f(w_0)\}$ is
+          bounded: satisfied, since $f$ is $\mu$-strongly convex with
+          $\mu = \lambda^2 > 0$, so all sublevel sets are compact ellipsoids;
+    \item there exist $M_1, M_2 > 0$ such that
+          $M_1\|v\|^2 \leq v^T \nabla^2 f(w)\,v \leq M_2\|v\|^2$ for all $v$:
+          satisfied with $M_1 = \mu = \lambda^2$ and
+          $M_2 = L = \lambda_{\max}(XX^T) + \lambda^2$, since
+          $\nabla^2 f = H$ is constant.
+\end{enumerate}
+Under these conditions, the iterates satisfy the linear convergence bound:
+\begin{equation}
+\label{eq:linconv}
+    f(w_k) - f(w^*) \leq r^k\,(f(w_0) - f(w^*)), \quad r \in [0,1),
+\end{equation}
+where the rate $r$ depends on the condition number $\kappa(\hat{X})$: the more
+ill-conditioned the problem, the slower the linear rate.
+
+\subsubsection{Superlinear Convergence}
+
+\noindent For full BFGS (i.e.\ $\bar{m}$ large enough to store the entire
+history),~\cite[Theorem~8.6]{nocedal2006numerical} guarantees superlinear
+convergence on strongly convex functions: the error ratio
+\begin{equation}
+\label{eq:superlin}
+    \frac{\norm{w_{k+1} - w^*}}{\norm{w_k - w^*}} \longrightarrow 0.
+\end{equation}
+Intuitively, as $H_k$ accumulates more and more
+accurate curvature information, it converges to the true $H^{-1}$, and the
+search direction $p_k \approx -H^{-1}\nabla f_k$ becomes increasingly close to
+the Newton step.
+
+% \noindent A non-asymptotic analysis by Rodomanov and Nesterov~\cite{rodomanov2021}
+% predicts that superlinear behaviour begins after approximately
+% $K_0 = 4m\ln\kappa$ iterations. Jin and Mokhtari~\cite{jin2022} provide the
+% local bound
+% \begin{equation}
+%     \frac{\|w_k - w^*\|_H}{\|w_0 - w^*\|_H}
+%     \leq \left(\frac{1}{k}\right)^{k/2},
+% \end{equation}
+% where $\|v\|_H = \sqrt{v^T H v}$ is the energy norm. This implies that
+% $\varepsilon$-accuracy requires only
+% $k = O\!\left(\frac{\log(1/\varepsilon)}{\log\log(1/\varepsilon)}\right)$
+% iterations, substantially better than the $O(\log(1/\varepsilon))$ bound for
+% linear convergence.
+
+
+% % ─────────────────────────────────────────────────────────────
+% \subsection{Applicability to the Problem at Hand}
+% \label{sec:applicability}
+% % ─────────────────────────────────────────────────────────────
+
+% \noindent The convergence results above are stated for general objective functions
+% satisfying a set of regularity conditions. We now verify explicitly that all such
+% conditions hold for our specific problem, so that the theoretical guarantees
+% apply rigorously.
+
+% \begin{enumerate}
+
+%     \item \textbf{Twice differentiability.}
+%     The objective $f(w) = \tfrac{1}{2}\|X^T w - y\|^2 + \tfrac{1}{2}\lambda^2\|w\|^2$
+%     is a quadratic polynomial in $w$, hence $f \in C^\infty$. In particular,
+%     the Hessian $H = XX^T + \lambda^2 I_m$ is constant and globally defined.
+
+%     \item \textbf{Bounded sublevel sets.}
+%     Since $f$ is $\mu$-strongly convex with $\mu = \lambda^2 > 0$
+%     (Section~\ref{sec:properties}), all sublevel sets
+%     $\mathcal{L}_c = \{w : f(w) \leq c\}$ are compact ellipsoids.
+%     In particular, the initial sublevel set $\mathcal{L}_0$ is bounded.
+
+%     \item \textbf{Lipschitz continuous gradient.}
+%     The gradient $\nabla f(w) = Hw - Xy$ is a linear function of $w$,
+%     hence Lipschitz continuous with constant $L = \lambda_{\max}(H)$
+%     (Section~\ref{sec:properties}):
+%     \begin{equation}
+%         \|\nabla f(w) - \nabla f(w')\| = \|H(w - w')\|
+%         \leq L\|w - w'\| \quad \forall\, w, w' \in \mathbb{R}^m.
+%     \end{equation}
+
+%     \item \textbf{Line search condition.}
+%     The exact line search (Section~\ref{sec:exact_ls}) finds the global
+%     minimiser of $f$ along each direction and therefore satisfies any
+%     reasonable descent condition. The strong Wolfe line search
+%     (Section~\ref{sec:linesearch}) satisfies
+%     conditions~\eqref{eq:armijo}--\eqref{eq:curvature} by construction, and
+%     in particular guarantees $y_k^T s_k > 0$ at every accepted step, ensuring
+%     that all BFGS updates are well-defined and positive definite.
+
+% \end{enumerate}
+
+% \noindent All four conditions are satisfied. Therefore, both the global linear
+% convergence result of~\cite{liu1989limited} and the local superlinear
+% convergence result of~\cite{nocedal2006numerical} apply rigorously to our
+% setting, with explicit constants $\mu = \lambda^2$ and
+% $L = \lambda_{\max}(XX^T) + \lambda^2$.

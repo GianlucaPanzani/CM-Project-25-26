@@ -39,6 +39,7 @@ Golub and Van Loan, *Matrix Computations*, 4th ed., 2013.
 import math
 import time
 import numpy as np
+from lib.utils import build_augmented_system
 
 
 
@@ -47,7 +48,7 @@ import numpy as np
 # 1. NAIVE QR SOLVER
 # =============================================================================
 
-def naive_qr_solver(A, b):
+def naive_qr_solver(X, y, lam):
     """Solve a tall least-squares problem by compact dense Householder QR.
 
     Parameters
@@ -78,13 +79,14 @@ def naive_qr_solver(A, b):
     ``Q`` is not formed.  Factorization costs ``O(rows*m**2)``, applying
     ``Q.T`` costs ``O(rows*m)``, and back substitution costs ``O(m**2)``.
     """
-    m = A.shape[1]
-
     start = time.perf_counter()
+
+    A, b = build_augmented_system(X, y, lam)
+    m = A.shape[1]
 
     R, reflectors = qr_factorize_naive(A)
     c = apply_QT(reflectors, b)
-    w = back_substitution(R, c[:m]) # Rw = c
+    w = back_substitution(R, c[:m])
 
     tot_time = time.perf_counter() - start
     return R, w, c, reflectors, tot_time
@@ -301,14 +303,14 @@ def qr_solver_structure_based(X, y, lam):
     -----
     The total cost is ``O(n*m**2 + m**2)``.  ``Q`` is not formed.
     """
+    start = time.perf_counter()
+
     m = X.shape[0]
     b_perm = np.concatenate((np.zeros(m), y))
 
-    start = time.perf_counter()
-
     R, reflectors = qr_factorize_structure_based(X, lam)
     c = apply_structure_based_QT(reflectors, b_perm, m)
-    w = back_substitution(R, c[:m]) # Rw = c
+    w = back_substitution(R, c[:m])
 
     tot_time = time.perf_counter() - start
     return R, w, c, reflectors, tot_time

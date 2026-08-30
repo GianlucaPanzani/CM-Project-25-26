@@ -1,0 +1,116 @@
+% ═════════════════════════════════════════════════════════════
+% Problem Properties
+\label{sec:properties}
+% ═════════════════════════════════════════════════════════════
+
+\noindent Before discussing the optimization algorithms, we analyze the mathematical
+properties of the objective function~\eqref{eq:expanded} that are relevant for
+convergence.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Gradient and Hessian}
+% ─────────────────────────────────────────────────────────────
+
+\noindent The objective~\eqref{eq:expanded} is a quadratic function of $w$.
+Consequently, its Hessian matrix is constant, as it does not depend on the
+variable $w$ but only on the fixed data matrix $X$ and the regularization
+parameter $\lambda$. Its gradient and Hessian are:
+
+\begin{align}
+    \nabla f(w) &= X(X^T w - y) + \lambda^2 w,
+    \label{eq:gradient} \\
+    H \coloneqq \nabla^2 f(w) &= XX^T + \lambda^2 I_m.
+    \label{eq:hessian}
+\end{align}
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Strong Convexity and Smoothness}
+% ─────────────────────────────────────────────────────────────
+
+\noindent To guarantee the existence of a unique global minimum and to analyze the
+convergence speed of our optimization algorithms, we first establish the strong
+convexity and smoothness of the objective function.
+
+\noindent By Lemma~\ref{lemma:fullrank}, the Hessian $H = XX^T + \lambda^2 I_m$
+is symmetric positive definite whenever $\lambda > 0$. This confirms that $f(w)$
+is strictly convex, ensuring that any local minimum is also the unique global
+minimum.
+
+\noindent Formally, this implies that $f$ is $\mu$-strongly convex and $L$-smooth,
+where the constants $\mu$ and $L$ correspond respectively to the smallest and
+largest eigenvalues of $H$. By Lemma~\ref{lemma:eigenvalues} (eigenvalue shift),
+the eigenvalues of $H = XX^T + \lambda^2 I_m$ are obtained by shifting those of
+$XX^T$ by $\lambda^2$:
+\begin{equation}
+\label{eq:muL}
+    \mu = \lambda_{\min}(H) = \lambda_{\min}(XX^T) + \lambda^2,
+    \qquad
+    L   = \lambda_{\max}(H) = \lambda_{\max}(XX^T) + \lambda^2.
+\end{equation}
+
+\noindent The smoothness constant $L$ bounds how rapidly the gradient can change.
+For all $w, w' \in \mathbb{R}^m$:
+\begin{equation}
+    \norm{\nabla f(w) - \nabla f(w')} = \norm{H(w - w')} \leq \norm{H}\,\norm{w - w'} = L\norm{w - w'}.
+\end{equation}
+
+\noindent Since our data matrix $X \in \mathbb{R}^{m \times n}$ is tall-thin
+($m > n$), by Lemma~\ref{lemma:singvals} the eigenvalues of $XX^T$ are
+$\{\sigma_1^2, \ldots, \sigma_n^2, 0, \ldots, 0\}$, so in particular
+$\lambda_{\min}(XX^T) = 0$. Therefore, the strong convexity constant simplifies
+to:
+\begin{equation}
+    \mu = \lambda^2.
+\end{equation}
+This highlights the crucial role of $\lambda$: without regularization, $H$ would
+be only positive \emph{semi}-definite, $\mu = 0$, and $f$ would lack strong
+convexity. In that case, the system $Hw = Xy$ would be underdetermined, the
+minimum would not be unique, and iterative methods would not converge to a
+well-defined solution.
+
+\noindent Together, $L$ and $\mu$ quantify the curvature of the objective: $\mu$
+controls the minimum curvature (how sharply $f$ rises in the flattest direction)
+and $L$ the maximum curvature (how sharply it rises in the steepest direction).
+Their ratio defines the condition number of the problem, which directly impacts
+the convergence speed of iterative solvers such as L-BFGS.
+
+
+% ─────────────────────────────────────────────────────────────
+\subsection{Condition Number}
+\label{sec:conditioning}
+% ─────────────────────────────────────────────────────────────
+
+\noindent The geometric shape of the objective function---and consequently the
+difficulty of the optimization problem---is summarized by the condition number of
+the augmented matrix $\hat{X}$, defined as the ratio of its largest to smallest
+singular values.
+
+\noindent To express this in terms of the problem parameters, we note that the
+singular values of $\hat{X}$ are the square roots of the eigenvalues of
+$\hat{X}^T\hat{X}$. A direct computation gives:
+\begin{equation}
+\label{eq:Xhat_gram}
+    \hat{X}^T\hat{X}
+    = \begin{bmatrix} X & \lambda I_m \end{bmatrix}
+      \begin{bmatrix} X^T \\ \lambda I_m \end{bmatrix}
+    = XX^T + \lambda^2 I_m = H,
+\end{equation}
+so $\sigma_i(\hat{X}) = \sqrt{\lambda_i(H)}$ for each $i$. Combining this with
+equations~\eqref{eq:muL}, the condition number of $\hat{X}$ is:
+\begin{equation}
+\label{eq:condition}
+    \kappa(\hat{X})
+    = \frac{\sigma_{\max}(\hat{X})}{\sigma_{\min}(\hat{X})}
+    = \sqrt{\frac{\lambda_{\max}(H)}{\lambda_{\min}(H)}}
+    = \sqrt{\frac{L}{\mu}}
+    = \frac{\sqrt{\lambda_{\max}(XX^T) + \lambda^2}}{\lambda}.
+\end{equation}
+
+\noindent As the equation shows, the condition number depends heavily on the
+regularization parameter. For small values of $\lambda$, it scales as
+$\mathcal{O}(1/\lambda)$: weak regularization produces a highly elongated,
+canyon-like objective landscape, causing iterative methods to take many small
+zigzagging steps. Conversely, a large $\lambda$ drives $\kappa(\hat{X}) \to 1$,
+making the problem nearly spherical and easy to solve from any direction.

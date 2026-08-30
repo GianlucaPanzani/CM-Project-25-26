@@ -224,7 +224,93 @@ def load_ml_cup(filepath, seed=42):
 
 
 # =============================================================================
-# 5. AUGMENTED SYSTEM CONSTRUCTION (for QR)
+# 5. DATASET AUGMENTATION FOR SCALING EXPERIMENTS
+# =============================================================================
+
+def build_augmented_X(X, m, seed=42, jitter=0.01):
+    """Enlarge a two-dimensional data matrix to exactly ``m`` rows.
+
+    The original rows are retained as the leading block.  Each additional row
+    is obtained by sampling one complete row of ``X`` with replacement and,
+    by default, adding small independent Gaussian noise scaled by the empirical
+    standard deviation of each column.  Sampling complete rows preserves the
+    dependence structure among columns better than generating every column
+    independently; the jitter avoids exact duplicates.
+
+    Parameters
+    ----------
+    X : array_like, shape (current_m, n)
+        Finite real-valued input data.  A NumPy array is returned even when
+        ``X`` is another two-dimensional array-like object.
+    m : int
+        Requested total number of rows.  It must be strictly greater than
+        ``X.shape[0]``.
+    seed : int or None, default=42
+        Seed passed to ``numpy.random.default_rng``.  Use the same seed to
+        reproduce an augmented matrix.
+    jitter : float, default=0.01
+        Standard deviation of the added noise as a fraction of each column's
+        empirical standard deviation.  Set it to zero for pure bootstrap
+        resampling.
+
+    Returns
+    -------
+    X_augmented : ndarray, shape (m, n)
+        Floating-point matrix containing ``X`` followed by the generated rows.
+
+    Raises
+    ------
+    TypeError
+        If ``X`` is not a real numeric matrix or ``m`` is not an integer.
+    ValueError
+        If ``X`` is empty or contains nonfinite values, if ``m`` is not larger
+        than the current row count, or if ``jitter`` is negative or nonfinite.
+    """
+    X_array = np.asarray(X)
+    if X_array.ndim != 2:
+        raise ValueError("X must be a two-dimensional matrix")
+    if X_array.shape[0] == 0 or X_array.shape[1] == 0:
+        raise ValueError("X must contain at least one row and one column")
+    if not np.issubdtype(X_array.dtype, np.number) or np.iscomplexobj(X_array):
+        raise TypeError("X must contain real numeric values")
+
+    X_array = X_array.astype(float, copy=False)
+    if not np.all(np.isfinite(X_array)):
+        raise ValueError("X must contain only finite values")
+
+    if isinstance(m, (bool, np.bool_)) or not isinstance(m, (int, np.integer)):
+        raise TypeError("m must be an integer")
+    current_m = X_array.shape[0]
+    if m <= current_m:
+        raise ValueError(
+            f"m must be greater than X.shape[0] ({current_m}); received {m}"
+        )
+
+    try:
+        jitter = float(jitter)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("jitter must be a real scalar") from exc
+    if not np.isfinite(jitter) or jitter < 0.0:
+        raise ValueError("jitter must be finite and nonnegative")
+
+    rng = np.random.default_rng(seed)
+    additional_rows = m - current_m
+    sampled_indices = rng.integers(0, current_m, size=additional_rows)
+    generated_rows = X_array[sampled_indices].copy()
+
+    if jitter > 0.0:
+        column_scale = np.std(X_array, axis=0)
+        generated_rows += rng.normal(
+            loc=0.0,
+            scale=jitter * column_scale,
+            size=generated_rows.shape,
+        )
+
+    return np.vstack((X_array, generated_rows))
+
+
+# =============================================================================
+# 6. AUGMENTED SYSTEM CONSTRUCTION (for QR)
 # =============================================================================
 
 def build_augmented_system(X, y, lam):
@@ -252,7 +338,7 @@ def build_augmented_system(X, y, lam):
 
 
 # =============================================================================
-# 6. EVALUATION METRICS
+# 7. EVALUATION METRICS
 # =============================================================================
 
 def compute_condition_number(X, lam):

@@ -1,0 +1,191 @@
+\documentclass[a4paper, 11pt, oneside]{book}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath, amssymb, mathtools, amsthm} % Aggiunto amsthm per i teoremi
+\usepackage[margin=2.0cm]{geometry} 
+\linespread{1.2}
+
+% ---------- Custom Math Commands dal vecchio report ----------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\|#1\right\|}
+\newcommand{\inner}[2]{\langle #1, #2 \rangle}
+\newcommand{\Xhat}{\hat{X}}
+\newcommand{\yhat}{\hat{y}}
+\DeclareMathOperator{\diag}{diag}
+
+% ---------- Theorem environments ----------
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{remark}{Remark}
+
+% ---------- Bibliography ----------
+\usepackage[
+  backend=biber,
+  style=numeric,
+  sorting=none,
+  doi=true,
+  url=true,
+  isbn=false
+]{biblatex}
+\addbibresource{bib.bib}
+
+% ---------- Pacchetti per grafici, tabelle e liste ----------
+\usepackage{graphicx}
+\usepackage{subfig}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage[table]{xcolor}
+\usepackage{pgfplots}
+\usepackage{booktabs} 
+\pgfplotsset{width=10cm,compat=1.9}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{csquotes}
+\usepackage{indentfirst}
+\usepackage{fancyhdr}
+\usepackage{tocloft}
+
+% ---------- Pacchetti per algoritmi ----------
+\usepackage{algorithm}
+\usepackage{algpseudocode} 
+\usepackage[most]{tcolorbox}
+
+\newtcolorbox{algobox}[1][]{
+  breakable,
+  colback=white,
+  colframe=black,
+  sharp corners,
+  title=#1,
+  fonttitle=\bfseries,
+  before skip=10pt, after skip=10pt,
+  boxrule=0.8pt,
+}
+
+% ---------- Hyperref (da caricare alla fine) ----------
+\usepackage[hidelinks]{hyperref}
+
+% Make the numeric citation label [n] link to DOI or URL
+\makeatletter
+\renewbibmacro*{cite}{%
+  \iffieldundef{doi}
+    {\iffieldundef{url}
+      {\printtext[bibhyperref]{\printfield{labelnumber}}}
+      {\printtext{\href{\thefield{url}}{\printfield{labelnumber}}}}}
+    {\printtext{\href{https://doi.org/\thefield{doi}}{\printfield{labelnumber}}}}%
+}
+\makeatother
+
+\hypersetup{
+  colorlinks=true,
+  citecolor=black,
+  filecolor=black,
+  linkcolor=black,
+  urlcolor=black
+}
+
+% ---------- Dedication env ----------
+\newenvironment{dedication}
+  {\clearpage
+   \thispagestyle{empty}
+   \vspace*{\stretch{1}}
+   \itshape
+   \raggedleft
+  }
+  {\par
+   \vspace{\stretch{3}}
+   \clearpage
+  }
+
+\begin{document}
+\pagestyle{plain}
+
+% ─── Frontespizio ───────────────────────────────────────────
+\begin{titlepage}
+    \begin{center}
+        \LARGE{\uppercase{University of Pisa}}\\
+        \vspace{5mm}
+        \uppercase{\normalsize Computer Science - Artificial Intelligence }\\
+    \end{center}
+    \begin{figure}[H]
+        \centering
+        % Sostituisci con il tuo logo
+        \includegraphics[width=0.50\textwidth]{Stemma_unipi.svg.png}
+    \end{figure}
+    \begin{center}
+        \LARGE{Project Track 19 --- Non-ML}\\
+        \vspace{15mm}
+         {\LARGE{\bf  Computational Mathematics for Learning and Data Analysis Project}}\\
+           \vspace{4mm}
+        {\LARGE{\bf QR Factorization and Limited-Memory \\Quasi-Newton Methods for Regularized Least Squares}}
+        \vspace{3mm}
+    \end{center}
+    
+    \vspace{8mm}
+
+\noindent
+\begin{minipage}[t]{0.45\textwidth}
+    \raggedright
+    {\large\bf Student:}\\
+    {\large\bf Karol Jinet Cardona Bolanos}\\
+    {\large Mat. 702023}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.45\textwidth}
+    \raggedleft
+    {\large\bf Student:}\\
+    {\large\bf Gianluca Panzani}\\
+    {\large Mat. 550358}
+\end{minipage}
+
+\vspace{10mm}
+
+    \centering{\large \uppercase{Academic Year 2025/2026}}
+\end{titlepage}
+
+\clearpage
+
+% ─── Indice ────────────────────────────────────────────────
+\tableofcontents
+\clearpage
+
+% Formattazione
+\sloppy
+\hyphenpenalty=100
+\exhyphenpenalty=100
+
+% ─── Capitoli ──────────────────────────────────────────────
+\chapter{Introduction}
+\input{Chapters/01_Introduction}
+\clearpage
+
+\chapter{Problem Properties}
+\input{Chapters/02_ProblemProperties}
+\clearpage
+
+\chapter{Limited-Memory BFGS (L-BFGS)}
+\input{Chapters/03_LBFGS}
+\clearpage
+
+\chapter{L-BFGS Experimental Results}
+\input{Chapters/04_LBFGS_Experiments}
+\clearpage
+
+\chapter{QR Factorization}
+\input{Chapters/05_QRFactorization}
+\clearpage
+
+% \chapter{Comparison: QR vs. L-BFGS}
+% \input{Chapters/06_Comparison}
+% \clearpage
+
+\appendix
+\chapter{Proofs}
+\input{Chapters/A_Appendix}
+\clearpage
+
+% ─── Bibliografia ──────────────────────────────────────────
+\printbibliography[heading=bibintoc]
+
+\end{document}

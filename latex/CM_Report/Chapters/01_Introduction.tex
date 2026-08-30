@@ -1,0 +1,48 @@
+% ═════════════════════════════════════════════════════════════
+% Introduction
+\label{sec:intro}
+% ═════════════════════════════════════════════════════════════
+
+\noindent This project addresses the numerical solution of a regularized linear least squares problem. 
+Given a data matrix $X \in \R^{m \times n}$ from the ML-CUP dataset, a random response vector 
+$y \in \R^n$, and a regularization parameter $\lambda > 0$, the goal is to find the vector 
+$w \in \R^m$ that minimizes
+
+\begin{equation}
+\label{eq:problem}
+    \min_w \norm{\Xhat w - \yhat},
+\end{equation}
+
+\noindent where the augmented matrix and vector are defined as
+
+\begin{equation}
+\label{eq:augmented}
+    \Xhat = \begin{bmatrix} X^T \\ \lambda I_m \end{bmatrix} \in \R^{(n+m) \times m}, 
+    \qquad
+    \yhat = \begin{bmatrix} y \\ 0 \end{bmatrix} \in \R^{n+m}.
+\end{equation}
+
+\noindent Expanding the squared norm, the problem is equivalent to minimizing
+
+\begin{equation}
+\label{eq:expanded}
+    f(w) = \frac{1}{2}\norm{X^T w - y}^2 + \frac{1}{2}\lambda^2 \norm{w}^2,
+\end{equation}
+
+\noindent which is a standard instance of Tikhonov regularization (ridge regression). 
+The regularization term $\lambda^2\norm{w}^2$ penalizes large coefficient vectors, 
+improving the numerical stability of the solution and controlling overfitting.
+
+\noindent Two computational strategies are explored:
+
+\begin{itemize}[nosep]
+    \item \textbf{(A1)} A limited-memory quasi-Newton method (L-BFGS), which iteratively 
+    approximates the curvature of the objective function using only gradient information 
+    and a small number of stored vector pairs.
+    \item \textbf{(A2)} A direct method based on thin QR factorization with Householder 
+    reflectors, in the compact variant where the orthogonal matrix~$Q$ is not formed 
+    explicitly, but applied implicitly through stored Householder vectors.
+\end{itemize}
+
+\noindent Both algorithms are implemented from scratch, without relying on any off-the-shelf 
+numerical solvers.

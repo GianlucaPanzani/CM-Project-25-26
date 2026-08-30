@@ -1,0 +1,29 @@
+\begin{lemma}[$\Xhat$ has full column rank]
+\label{lemma:fullrank}
+If $\lambda > 0$, then $\Xhat^T\Xhat = XX^T + \lambda^2 I_m \succ 0$.
+\end{lemma}
+\begin{proof}
+For any nonzero $v \in \R^m$:
+$v^T(XX^T + \lambda^2 I_m)v = \norm{X^T v}^2 + \lambda^2\norm{v}^2 \geq \lambda^2\norm{v}^2 > 0.$
+\end{proof}
+
+\begin{lemma}[Eigenvalue shift]
+\label{lemma:eigenvalues}
+If $\alpha$ is an eigenvalue of $A$, then $\alpha + c$ is an eigenvalue of $A + cI$.
+\end{lemma}
+\begin{proof}
+$Av = \alpha v \iff (A + cI)v = (\alpha + c)v.$
+\end{proof}
+
+\begin{lemma}[Singular values of $XX^T$]
+\label{lemma:singvals}
+The eigenvalues of $XX^T \in \R^{m \times m}$ are 
+$\{\sigma_1^2, \ldots, \sigma_n^2, 0, \ldots, 0\}$, where $\sigma_1, \ldots, \sigma_n$ 
+are the singular values of $X$.
+In particular, $\lambda_m(XX^T) = 0$ when $m > n$.
+\end{lemma}
+\begin{proof}
+Let $X = U\Sigma V^T$ be the SVD.
+Then $XX^T = U\Sigma\Sigma^T U^T$, 
+where $\Sigma\Sigma^T = \diag(\sigma_1^2, \ldots, \sigma_n^2, 0, \ldots, 0) \in \R^{m \times m}$.
+\end{proof}
