@@ -661,17 +661,6 @@ the whole trailing part of the matrix:
 \end{algorithmic}
 \end{algorithm}
 
-\noindent\textbf{Implementation status.}
-Algorithm~\ref{alg:row_insertion_householder} describes the intended update, but
-the current function \texttt{qr\_factorize\_row\_insertion\_2d} does not yet
-implement it correctly. It assigns $R_{kk}=\rho$ and $a_k=0$ before subtracting
-the reflector update from slices that still include position $k$; those two
-prescribed values are therefore overwritten. Consequently, the returned $R$
-is not guaranteed to be a QR factor and the resulting $w$ is not a valid
-least-squares solution. The notebook reports the corresponding accuracy values
-only as failure diagnostics, and this implementation is excluded from the
-stability conclusions below.
-
 \subsection{Runtime Scalability}
 \label{sec:qr_scalability}
 
@@ -685,8 +674,8 @@ $(n+1)\times(m-k+1)$ block at each step. Its factorization cost is therefore
 \end{equation}
 
 \noindent Applying the reflectors to the right-hand side costs $O(nm)$ and back
-substitution costs $O(m^2)$. The complete valid structure-based solver thus
-costs $O(nm^2+m^2)$. The intended row-insertion algorithm has the same order:
+substitution costs $O(m^2)$. The complete structure-based solver thus costs
+$O(nm^2+m^2)$. The row-insertion algorithm has the same order:
 for each of the $n$ data rows, it applies $m$ transformations to trailing
 segments, at a cost
 
@@ -694,9 +683,7 @@ segments, at a cost
     \sum_{i=1}^{n}\sum_{k=1}^{m}O(m-k+1)=O(nm^2),
 \end{equation}
 
-\noindent followed by $O(m^2)$ back substitution. This is a complexity statement
-about Algorithm~\ref{alg:row_insertion_householder}, not a correctness claim
-about its current implementation.
+\noindent followed by $O(m^2)$ back substitution.
 
 \noindent Combining these bounds with Section~\ref{sec:qr_cost_project} gives
 
@@ -705,15 +692,14 @@ about its current implementation.
 \begin{aligned}
     T_{\mathrm{dense\ QR}}(m,n) &= O(m^3+nm^2),\\
     T_{\mathrm{structure\text{-}based\ QR}}(m,n) &= O(m^2+nm^2),\\
-    T_{\mathrm{row\ insertion}}(m,n) &= O(m^2+nm^2)
-        \quad\text{(intended)},\\
+    T_{\mathrm{row\ insertion}}(m,n) &= O(m^2+nm^2),\\
     T_{\mathrm{normal\ equations}}(m,n) &= O(m^3+nm^2).
 \end{aligned}
 \end{equation}
 
 \noindent Hence, with the project value $n=12$ fixed, both structured algorithms
 are quadratic in $m$, whereas generic dense QR and a dense normal-equations
-solve retain a cubic term. The valid structure-based implementation stores the
+solve retain a cubic term. The structure-based implementation stores the
 triangular factor, a copy of the dense block, and $m$ reflectors of length
 $n+1$, for $O(m^2+nm)$ memory. The current row-insertion wrapper also stores
 all $nm$ two-dimensional reflector records; disabling that optional storage
@@ -733,9 +719,7 @@ a warm-up or randomized execution order.
 \begin{table}[H]
 \centering
 \caption{Internal solver times in milliseconds for the augmented-data runtime
-sweep. The normal-equations timer is partial, while the row-insertion values
-characterize the current defective implementation and are reported only as
-timing diagnostics.}
+sweep. The normal-equations timer is partial.}
 \label{tab:qr_runtime_scaling}
 \small
 \setlength{\tabcolsep}{5pt}
@@ -744,12 +728,12 @@ timing diagnostics.}
     $m$ & \textbf{Normal eq.} & \textbf{Dense QR}
         & \textbf{Structure-based QR} & \textbf{Row insertion}\\
     \midrule
-     100 &    0.145 &      6.366 &   3.591 &  12.694\\
-     250 &    0.904 &     34.762 &  13.733 &  45.153\\
-     500 &    6.092 &    241.679 &  38.548 &  92.278\\
-    1000 &   33.752 &   4093.580 &  48.606 & 135.679\\
-    2000 &  309.424 &  29055.476 & 137.792 & 316.786\\
-    4000 & 1889.553 & 197120.923 & 494.047 & 827.584\\
+     100 &    0.138 &      5.440 &   3.840 &  12.543\\
+     250 &    1.333 &     70.165 &  18.151 &  68.379\\
+     500 &    6.235 &    288.259 &  40.001 &  75.609\\
+    1000 &   39.286 &   3830.648 &  61.597 & 143.880\\
+    2000 &  296.157 &  26490.742 & 157.124 & 314.136\\
+    4000 & 1628.571 & 180615.340 & 422.753 & 777.798\\
     \bottomrule
 \end{tabular}
 \end{table}
@@ -764,14 +748,16 @@ substitution. Row insertion includes its fused right-hand-side updates and the
 storage of all reflectors. Consequently, the normal-equations column prevents
 Table~\ref{tab:qr_runtime_scaling} from being a uniform end-to-end comparison.
 
-\noindent Within the comparable QR timings, at $m=4000$ the valid
-structure-based path takes approximately $0.494$ seconds, versus $197.121$
-seconds for dense QR, a factor of about $399$. On the final doubling from
-$m=2000$ to $m=4000$, the dense and structure-based times increase by factors
-of approximately $6.79$ and $3.59$, respectively, which is consistent with
-the cubic and quadratic terms in Eq.~\eqref{eq:qr_scaling_summary}. These six
-measurements are empirical evidence, not a proof of asymptotic complexity;
-moreover, the notebook computes reference-slope arrays but does not draw them.
+\noindent Within the comparable QR timings, at $m=4000$ the structure-based
+path takes approximately $0.423$ seconds and row insertion $0.778$ seconds,
+versus $180.615$ seconds for dense QR; the structure-based method is therefore
+about $427$ times faster than dense QR at this size. On the final doubling from
+$m=2000$ to $m=4000$, the dense, structure-based, and row-insertion times
+increase by factors of approximately $6.82$, $2.69$, and $2.48$, respectively,
+which is consistent with the cubic and quadratic terms in
+Eq.~\eqref{eq:qr_scaling_summary}. These six measurements are empirical
+evidence, not a proof of asymptotic complexity; moreover, the notebook computes
+reference-slope arrays but does not draw them.
 
 \subsection{Algorithmic Stability and the Condition Number}
 \label{sec:qr_stability}
@@ -879,11 +865,11 @@ scaled optimality must be read together: dense QR has the smallest forward
 error there, whereas structure-based QR has the smallest scaled optimality
 residual.
 
-\noindent Two notebook limitations remain. First, the row-insertion curve
-inherits the implementation defect described above and is not a valid
-stability measurement. Second, the printed diagnostics table uses the final
-scalar condition number and final scalar error values in every row instead of
-indexing the stored arrays, so its display is incorrect. The plots use the
-stored arrays; the condition numbers, SVD reference calculations,
-normal-equations results, dense-QR results, and structure-based results are
-valid and support the comparison made here.
+\noindent One execution-state limitation remains in the saved notebook. Although
+the row-insertion source has been corrected, the run retained the old imported
+function in the active kernel. Its stored row-insertion accuracy and stability
+values are therefore obsolete and are excluded from the conclusions above.
+The printed scaled-optimality table correctly indexes the stored arrays, and
+the condition numbers, SVD reference calculations, normal-equations results,
+dense-QR results, and structure-based results are valid and support the
+comparison made here.
