@@ -538,10 +538,10 @@ def qr_factorize_row_insertion_2d(X, lam, y, store_reflectors=True):
             coefficient = 2.0 * (u1 * c[k] + u2 * yi_transformed)
 
             # Update the triangular matrix, the row of X.T and the b_perm
-            R[k, k] = alpha
             R[k, k:] -= u1 * coefficients
-            row[k] = 0.0
             row[k:] -= u2 * coefficients
+            R[k, k] = alpha
+            row[k] = 0.0
 
             c[k] -= coefficient * u1
             yi_transformed -= coefficient * u2

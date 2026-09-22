@@ -719,16 +719,23 @@ $n+1$, for $O(m^2+nm)$ memory. The current row-insertion wrapper also stores
 all $nm$ two-dimensional reflector records; disabling that optional storage
 would leave only $O(m)$ workspace in addition to $R$.
 
-\noindent The notebook measures nested problems with fixed $n=12$,
-$m\in\{50,100,200,350,500\}$, and $\lambda=0.5$. Each entry in
+\noindent The notebook first constructs a single matrix with $4000$ rows by
+calling \texttt{build\_augmented\_X} with seed $42$ and jitter $0.01$. The
+original $500$ rows are retained as the leading block; each additional row is
+sampled as a complete row of $X$ and perturbed by Gaussian noise scaled by the
+empirical standard deviation of each column. Taking prefixes of this matrix
+produces nested problems with fixed $n=12$,
+$m\in\{100,250,500,1000,2000,4000\}$, and $\lambda=0.5$. Data generation is
+performed once, outside every timed region. Each entry in
 Table~\ref{tab:qr_runtime_scaling} is the arithmetic mean of ten runs, without
 a warm-up or randomized execution order.
 
 \begin{table}[H]
 \centering
-\caption{Internal solver times in milliseconds for the runtime sweep. The
-row-insertion values characterize the current defective implementation and are
-reported only as timing diagnostics.}
+\caption{Internal solver times in milliseconds for the augmented-data runtime
+sweep. The normal-equations timer is partial, while the row-insertion values
+characterize the current defective implementation and are reported only as
+timing diagnostics.}
 \label{tab:qr_runtime_scaling}
 \small
 \setlength{\tabcolsep}{5pt}
@@ -737,26 +744,34 @@ reported only as timing diagnostics.}
     $m$ & \textbf{Normal eq.} & \textbf{Dense QR}
         & \textbf{Structure-based QR} & \textbf{Row insertion}\\
     \midrule
-     50 & 0.053 &   1.635 &  1.509 &  5.673\\
-    100 & 0.089 &   2.716 &  2.165 &  7.587\\
-    200 & 0.329 &  11.002 &  5.310 & 19.778\\
-    350 & 1.133 &  42.893 & 13.632 & 44.211\\
-    500 & 3.068 & 121.257 & 18.604 & 54.932\\
+     100 &    0.145 &      6.366 &   3.591 &  12.694\\
+     250 &    0.904 &     34.762 &  13.733 &  45.153\\
+     500 &    6.092 &    241.679 &  38.548 &  92.278\\
+    1000 &   33.752 &   4093.580 &  48.606 & 135.679\\
+    2000 &  309.424 &  29055.476 & 137.792 & 316.786\\
+    4000 & 1889.553 & 197120.923 & 494.047 & 827.584\\
     \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent These timers do not have identical scopes. The normal-equations baseline
-times only \texttt{numpy.linalg.solve}, excluding construction of $XX^T+
-\lambda^2I_m$ and $Xy$. Dense QR excludes construction of $A$ and $b$;
-structure-based QR excludes construction of $[0;y]$; row insertion includes
-factorization, fused right-hand-side updates, storage of all reflectors, and
-back substitution. Consequently, Table~\ref{tab:qr_runtime_scaling} is not a
-uniform end-to-end benchmark. It nevertheless shows that, at $m=500$, the
-valid structure-based path is about $6.5$ times faster than dense QR within
-the measured scopes. Five sampled dimensions, without visible reference-slope
-curves in the notebook plot, are empirical evidence rather than a proof of the
-asymptotic orders in Eq.~\eqref{eq:qr_scaling_summary}.
+\noindent The solver timers still do not have identical scopes. The
+normal-equations baseline measures only \texttt{numpy.linalg.solve}, excluding
+construction of $XX^T+\lambda^2I_m$, construction of $Xy$, and evaluation of
+the objective. In the current code, dense QR starts its timer before building
+$A$ and $b$, while structure-based QR starts before building $[0;y]$; both
+then include factorization, right-hand-side transformation, and back
+substitution. Row insertion includes its fused right-hand-side updates and the
+storage of all reflectors. Consequently, the normal-equations column prevents
+Table~\ref{tab:qr_runtime_scaling} from being a uniform end-to-end comparison.
+
+\noindent Within the comparable QR timings, at $m=4000$ the valid
+structure-based path takes approximately $0.494$ seconds, versus $197.121$
+seconds for dense QR, a factor of about $399$. On the final doubling from
+$m=2000$ to $m=4000$, the dense and structure-based times increase by factors
+of approximately $6.79$ and $3.59$, respectively, which is consistent with
+the cubic and quadratic terms in Eq.~\eqref{eq:qr_scaling_summary}. These six
+measurements are empirical evidence, not a proof of asymptotic complexity;
+moreover, the notebook computes reference-slope arrays but does not draw them.
 
 \subsection{Algorithmic Stability and the Condition Number}
 \label{sec:qr_stability}
@@ -798,11 +813,12 @@ of $A+\Delta A$ with
 The resulting forward error still depends on the conditioning and geometry of
 the least-squares problem. Accordingly, the notebook uses
 $\varepsilon_{\mathrm{mach}}\kappa_2(A)$ for QR and
-$\min\{1,\varepsilon_{\mathrm{mach}}\kappa_2(A)^{2}\}$ for normal equations as
-trend guides for the respective $O(\varepsilon_{\mathrm{mach}}\kappa_2(A))$
-and possible $O(\varepsilon_{\mathrm{mach}}\kappa_2(A)^{2})$ regimes; these are
-not universal error bounds. It also plots $\varepsilon_{\mathrm{mach}}$ as a
-reference scale for $\eta_{\mathrm{opt}}$.
+$\min\{1,\varepsilon_{\mathrm{mach}}\kappa_2(A)^{2}\}$ for normal equations
+only as heuristic trend guides. They are not universal error bounds: the
+forward condition number of the least-squares solution also depends on the
+residual geometry. The notebook additionally plots
+$\varepsilon_{\mathrm{mach}}$ as a reference scale for
+$\eta_{\mathrm{opt}}$.
 
 \noindent The notebook diagnoses this behavior using an independent thin-SVD
 reference. If $X=U\Sigma V^T$, then the Tikhonov solution is
@@ -838,28 +854,36 @@ $\eta_{\mathrm{opt}}$ verifies the optimality condition. It does not by itself
 guarantee a small forward error when $A$ is severely ill-conditioned; both
 diagnostics must therefore be considered together.
 
-\noindent The experiment sweeps $\lambda\in\{10^j:j=-12,\ldots,4\}$. On the valid
-structure-based series, decreasing $\lambda$ produces the loss of forward
-accuracy predicted by Eq.~\eqref{eq:qr_condition_lambda}. In the
-ill-conditioned part of the sweep, it remains much more robust than the
-normal-equations baseline. For example, at
-$\lambda=10^{-6}$, where $\kappa_2(A)\approx7.575\times10^7$, the measured
-forward errors are approximately $1.11\times10^{-9}$ for structure-based QR
-and $4.04\times10^{-1}$ for normal equations. At $\lambda=10^{-12}$, where
+\noindent The experiment sweeps $\lambda\in\{10^j:j=-12,\ldots,4\}$. The
+current dense solver receives $X$, $y$, and the current value of $\lambda$ at
+every iteration, so its augmented system is now rebuilt correctly throughout
+the sweep. For normal equations, dense QR, and structure-based QR,
+respectively, the relative forward errors at $\lambda=10^{-6}$, where
+$\kappa_2(A)\approx7.575\times10^7$, are approximately
+$4.04\times10^{-1}$, $6.08\times10^{-14}$, and $1.11\times10^{-9}$. At
+$\lambda=10^{-12}$, where
 $\kappa_2(A)\approx7.575\times10^{13}$, they are approximately
-$6.43\times10^{-4}$ and $1.55\times10^1$, respectively. These observations
-are consistent with backward-stable QR being less sensitive than explicitly
-formed normal equations. The corresponding $\eta_{\mathrm{opt}}$ values for
-structure-based QR and normal equations are, respectively,
-$9.03\times10^{-10}$ and $6.63\times10^{-9}$ at $\lambda=10^{-6}$, and
-$6.64\times10^{-5}$ and $1.92\times10^{-3}$ at $\lambda=10^{-12}$.
+$1.55\times10^1$, $4.04\times10^{-14}$, and $6.43\times10^{-4}$. At these two
+ill-conditioned sample points, both Householder methods are substantially more
+accurate than the explicitly formed normal equations, and dense QR has the
+smallest forward error. Its near-machine-precision forward error at very small
+$\lambda$ is an empirical property of this problem and must not be interpreted
+as a universal conditioning-independent guarantee.
 
-\noindent Three notebook limitations restrict the scope of this conclusion. First,
-the dense-QR sweep reuses $A$ and $b$ constructed once at $\lambda=0.5$, so
-its curve does not represent the stated variation in $\lambda$. Second, the
-row-insertion curve inherits the implementation defect described above.
-Third, the printed forward-error table uses the final scalar values in every
-row instead of indexing the stored arrays. The condition-number arrays, the
-SVD reference calculations, and the normal-equations and structure-based
-diagnostic arrays are valid; only these support the stability comparison made
-here.
+\noindent In the same method order, the corresponding
+$\eta_{\mathrm{opt}}$ values are $6.63\times10^{-9}$,
+$4.89\times10^{-10}$, and $9.03\times10^{-10}$ at $\lambda=10^{-6}$, and
+$1.92\times10^{-3}$, $2.01\times10^{-3}$, and $6.64\times10^{-5}$ at
+$\lambda=10^{-12}$. The extreme case also illustrates why forward error and
+scaled optimality must be read together: dense QR has the smallest forward
+error there, whereas structure-based QR has the smallest scaled optimality
+residual.
+
+\noindent Two notebook limitations remain. First, the row-insertion curve
+inherits the implementation defect described above and is not a valid
+stability measurement. Second, the printed diagnostics table uses the final
+scalar condition number and final scalar error values in every row instead of
+indexing the stored arrays, so its display is incorrect. The plots use the
+stored arrays; the condition numbers, SVD reference calculations,
+normal-equations results, dense-QR results, and structure-based results are
+valid and support the comparison made here.
