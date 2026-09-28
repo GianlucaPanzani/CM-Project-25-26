@@ -722,7 +722,16 @@ cost of the row-insertion solver is
 \end{aligned}
 \end{equation}
 
-\noindent Hence, with the project value $n=12$ fixed, both structured algorithms are quadratic in $m$, whereas generic dense QR and a dense normal-equations solve retain a cubic term. The structure-based implementation stores the triangular factor, a copy of the dense block, and $m$ reflectors of length $n+1$, for $O(m^2+nm)$ memory. The current row-insertion wrapper also stores all $nm$ two-dimensional reflector records; disabling that optional storage would leave only $O(m)$ workspace in addition to $R$.
+\noindent Hence, with the project value $n=12$ fixed, both structured algorithms are quadratic in $m$, whereas generic dense QR and a dense normal-equations solve retain a cubic term.
+
+\begin{wrapfigure}{r}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{Chapters/images/qr_runtime_scaling.png}
+    \caption{Mean solver times for increasing $m$, with $n=12$ fixed.}
+    \label{fig:qr_runtime_scaling}
+\end{wrapfigure}
+
+\noindent The structure-based implementation stores the triangular factor, a copy of the dense block, and $m$ reflectors of length $n+1$, for $O(m^2+nm)$ memory. The current row-insertion wrapper also stores all $nm$ two-dimensional reflector records; disabling that optional storage would leave only $O(m)$ workspace in addition to $R$.
 
 \noindent The notebook first constructs a single matrix with $4000$ rows. The original $500$ rows are retained as the leading block; each additional row is sampled as a complete row of $X$ and perturbed by Gaussian noise scaled by the empirical standard deviation of each column. Taking prefixes of this matrix produces nested problems with fixed $n=12$, $m\in\{100,250,500,1000,2000,4000\}$, and $\lambda=0.5$. Data generation is performed once, outside every timed region. Each entry in Table~\ref{tab:qr_runtime_scaling} is the arithmetic mean of ten runs, without a warm-up or randomized execution order.
 
@@ -748,13 +757,9 @@ sweep. The normal-equations timer is partial.}
 \end{tabular}
 \end{table}
 
-\noindent The QR timings include the preparation of the required data
-structures, factorization, transformation of the right-hand side, and
-back substitution. In the row-insertion method, the right-hand side is
-updated during factorization. Dataset generation and accuracy diagnostics
-are excluded from the timed regions.
+\noindent The QR timings include the preparation of the required data structures, factorization, transformation of the right-hand side, and back substitution. In the row-insertion method, the right-hand side is updated during factorization. Dataset generation and accuracy diagnostics are excluded from the timed regions.
 
-\noindent Within the comparable QR timings, at $m=4000$ the structure-based
+\noindent Within the comparable QR timings shown in Figure~\ref{fig:qr_runtime_scaling}, at $m=4000$ the structure-based
 path takes approximately $0.611$ seconds and row insertion $0.988$ seconds,
 versus $267.000$ seconds for dense QR; the structure-based method is therefore
 about $437$ times faster than dense QR at this size. On the final doubling from
@@ -790,7 +795,7 @@ zero eigenvalues. Therefore, giving $\lambda>0$, we have
 $\sigma_{\max}(X)/\lambda$ when $\lambda\to0^+$ and tends to $1$ as
 $\lambda\to\infty$. Forming the normal equations squares this number, as
 shown in Eq.~\eqref{eq:qr_condition_squaring}; this is precisely the
-conditioning penalty avoided by Householder QR: get $\kappa_2(A)$ instead of $\kappa_2(A)^2$.
+conditioning penalty avoided by Householder QR, getting $\kappa_2(A)$ instead of $\kappa_2(A)^2$.
 
 \noindent In the standard floating-point model with machine precision
 $\varepsilon_{\mathrm{m}}$, Householder QR is backward stable: up to
@@ -801,9 +806,7 @@ of $A+\Delta A$ with
     \frac{\norm{\Delta A}_2}{\norm{A}_2}=O(\varepsilon_{\mathrm{m}}),
 \end{equation}
 
-\noindent and the computed orthogonal factor is orthogonal to working precision.
-The resulting forward error still depends on the conditioning and geometry of
-the least-squares problem. Accordingly, in the notebook is used $\varepsilon_{\mathrm{m}}\kappa_2(A)$ for QR and $\min\{1,\varepsilon_{\mathrm{m}}\kappa_2(A)^{2}\}$ for normal equations only as heuristic trend guides. They are not universal error bounds: the forward condition number of the least-squares solution also depends on the residual geometry. The notebook additionally plots $\varepsilon_{\mathrm{m}}$ as a reference scale for $\eta_{\mathrm{opt}}$.
+\noindent and the computed orthogonal factor is orthogonal to working precision. The resulting forward error still depends on the conditioning and geometry of the least-squares problem. Accordingly, the notebook uses $\varepsilon_m \kappa_2(A)$ for Householder QR and $\min\{1,\varepsilon_m \kappa_2(A)^2\}$ for the normal equations as heuristic indicators of the expected forward-error scale. These quantities should not be interpreted as rigorous universal upper bounds. In particular, the forward sensitivity of a least-squares solution depends not only on $\kappa_2(A)$, but also on the geometry of the problem, including the size and orientation of the residual. The curves are therefore intended only to illustrate the expected conditioning trend of the two methods. The notebook additionally plots $\varepsilon_{\mathrm{m}}$ as a reference scale for $\eta_{\mathrm{opt}}$.
 
 \noindent The notebook diagnoses this behavior using an independent thin-SVD
 reference. If $X=U\Sigma V^T$, then the Tikhonov solution is
@@ -839,9 +842,17 @@ $\eta_{\mathrm{opt}}$ verifies the optimality condition. It does not by itself
 guarantee a small forward error when $A$ is severely ill-conditioned; both
 diagnostics must therefore be considered together.
 
-\noindent The experiment sweeps $\lambda\in\{10^j:j=-12,\ldots,4\}$.
-For normal equations, dense QR, structure-based QR, and row insertion,
-respectively, the relative forward errors at $\lambda=10^{-6}$, where
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{Chapters/images/qr_conditioning_stability.png}
+    \caption{Conditioning and numerical stability: condition number versus
+    $\lambda$ (left), relative forward error (middle), and scaled optimality
+    residual (right).}
+    \label{fig:qr_conditioning_stability}
+\end{figure}
+
+\noindent The experiment in Figure~\ref{fig:qr_conditioning_stability} sweeps $\lambda\in\{10^j:j=-12,\ldots,4\}$.
+For normal equations, dense QR, structure-based QR, and row insertion, respectively, the relative forward errors at $\lambda=10^{-6}$, where
 $\kappa_2(A)\approx7.575\times10^7$, are approximately
 $4.04\times10^{-1}$, $6.08\times10^{-14}$, $1.11\times10^{-9}$, and
 $3.00\times10^{-10}$. At
