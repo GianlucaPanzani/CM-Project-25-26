@@ -759,10 +759,10 @@ sweep. The normal-equations timer is partial.}
 
 \noindent The QR timings include the preparation of the required data structures, factorization, transformation of the right-hand side, and back substitution. In the row-insertion method, the right-hand side is updated during factorization. Dataset generation and accuracy diagnostics are excluded from the timed regions.
 
-\noindent Within the comparable QR timings shown in Figure~\ref{fig:qr_runtime_scaling}, at $m=4000$ the structure-based
-path takes approximately $0.611$ seconds and row insertion $0.988$ seconds,
-versus $267.000$ seconds for dense QR; the structure-based method is therefore
-about $437$ times faster than dense QR at this size. On the final doubling from
+\noindent Figure~\ref{fig:qr_runtime_scaling} highlights the growing runtime
+gap between dense QR and the two structured methods. Structure-based QR is
+the fastest QR implementation at every sampled size, reaching a speedup of
+about $437$ over dense QR at $m=4000$. On the final doubling from
 $m=2000$ to $m=4000$, the dense, structure-based, and row-insertion times
 increase by factors of approximately $6.40$, $3.89$, and $3.08$, respectively,
 which is consistent with the cubic and quadratic terms in
@@ -852,26 +852,17 @@ diagnostics must therefore be considered together.
 \end{figure}
 
 \noindent The experiment in Figure~\ref{fig:qr_conditioning_stability} sweeps $\lambda\in\{10^j:j=-12,\ldots,4\}$.
-For normal equations, dense QR, structure-based QR, and row insertion, respectively, the relative forward errors at $\lambda=10^{-6}$, where
-$\kappa_2(A)\approx7.575\times10^7$, are approximately
-$4.04\times10^{-1}$, $6.08\times10^{-14}$, $1.11\times10^{-9}$, and
-$3.00\times10^{-10}$. At
-$\lambda=10^{-12}$, where
-$\kappa_2(A)\approx7.575\times10^{13}$, they are approximately
-$1.55\times10^1$, $4.04\times10^{-14}$, $6.43\times10^{-4}$, and
-$4.92\times10^{-4}$. At these two
-ill-conditioned sample points, all three Householder methods are substantially more
-accurate than the explicitly formed normal equations, and dense QR has the
-smallest forward error. Its near-machine-precision forward error at very small
+The left panel shows the increase in the condition number as $\lambda$ decreases.
+The middle panel shows that normal equations lose accuracy much earlier than
+the three Householder methods. Both structured variants gradually lose
+accuracy as conditioning worsens, but their relative forward errors remain
+below $10^{-3}$ even at $\lambda=10^{-12}$. Dense QR has the smallest forward
+error in this ill-conditioned regime. Its near-machine-precision forward error at very small
 $\lambda$ is an empirical property of this problem and must not be interpreted
 as a universal conditioning-independent guarantee.
 
-\noindent In the same method order, the corresponding
-$\eta_{\mathrm{opt}}$ values are $6.63\times10^{-9}$,
-$4.89\times10^{-10}$, $9.03\times10^{-10}$, and $3.85\times10^{-10}$ at
-$\lambda=10^{-6}$, and $1.92\times10^{-3}$, $2.01\times10^{-3}$,
-$6.64\times10^{-5}$, and $4.08\times10^{-3}$ at
-$\lambda=10^{-12}$. The extreme case also illustrates why forward error and
-scaled optimality must be read together: dense QR has the smallest forward
-error there, whereas structure-based QR has the smallest scaled optimality
-residual.
+\noindent The right panel complements the forward-error comparison: at
+$\lambda=10^{-12}$, structure-based QR has the smallest scaled optimality
+residual, approximately $6.64\times10^{-5}$, whereas dense QR has the smallest
+forward error. This difference illustrates why the two diagnostics must be
+read together when comparing the methods.
