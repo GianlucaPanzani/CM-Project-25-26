@@ -1,7 +1,4 @@
-"""
-================================================================================
-lbfgs.py — A1: Limited-Memory BFGS (L-BFGS)
-================================================================================
+""" Limited-Memory BFGS (L-BFGS)
 
 L-BFGS algorithm for the problem:
     min_w  f(w) = (1/2)||X^T w - y||^2 + (1/2) lambda^2 ||w||^2
@@ -38,7 +35,6 @@ Implemented components:
     8. Robust benchmarking wrapper (median over N runs with warm-up;
                                     used to obtain reliable wall-clock
                                     measurements on sub-millisecond runs)
-================================================================================
 """
 
 import numpy as np
@@ -58,7 +54,7 @@ def lbfgs_two_loop(grad_k, s_list, y_list, rho_list, gamma_k):
     formed explicitly. Only the m most recent {s_i, y_i} pairs and
     the scaling H_0 = gamma_k * I are used.
 
-    Cost: O(4 * m_history * dim) multiplications + O(dim) for H_0.
+    Cost: (8 * m_history + 1) * dim flops (one flop = one add or multiply).
 
     Parameters
     ---------
@@ -255,18 +251,19 @@ def strong_wolfe_line_search(w, p, f_0, grad_0, dg_0,
 #
 # The standard L-BFGS only skips a pair when y_k^T s_k <= 0 (negative
 # curvature). Liu & Nocedal (1989) suggest a stronger criterion: reset the
-# entire memory when the curvature captured by the new pair is negligible
-# relative to the current H0 scaling, i.e. when:
+# entire memory when the curvature ratio of the new pair drops sharply
+# relative to the same ratio of the previously stored pair, i.e. when:
 #
 #     y_k^T s_k / ||y_k||^2  <  xi * gamma_{k-1}
 #
-# where gamma_{k-1} = s_{k-1}^T y_{k-1} / ||y_{k-1}||^2 is the previous
-# scaling and xi in (0,1) is a user-chosen threshold (default 0.2).
+# where gamma_{k-1} = s_{k-1}^T y_{k-1} / ||y_{k-1}||^2 is the same ratio for
+# the previously stored pair (always the BB2 ratio, independently of the H0
+# strategy) and xi in (0,1) is a user-chosen threshold (default 0.2).
 #
-# Intuition: gamma_k = s^T y / y^T y  is the "effective curvature radius"
-# estimated along s_k. If it drops dramatically relative to the previous
-# estimate, the memory contains stale / contradictory curvature information
-# and should be discarded.
+# Intuition: gamma_k = s^T y / y^T y is an estimate of the inverse curvature
+# along s_k. If it drops dramatically relative to the previous estimate, the
+# memory contains stale / contradictory curvature information and should be
+# discarded.
 # =============================================================================
 
 def _should_restart(s_k, y_k, ys, gamma_prev, xi=0.2):
@@ -300,15 +297,17 @@ def _should_restart(s_k, y_k, ys, gamma_prev, xi=0.2):
 #
 # Three strategies for choosing gamma_k (the scalar that defines H_0^k = gamma_k * I):
 #
-#  'nocedal' (default, already in original code):
+#  'nocedal':
 #      gamma_k = s_{k-1}^T y_{k-1} / y_{k-1}^T y_{k-1}           [Eq. 9.6]
 #      This is also known as the BB2 step (Barzilai & Borwein 1988, Eq. 3.2).
 #      It estimates the inverse curvature of the Hessian along s_{k-1}.
 #
-#  'bb1' (Barzilai & Borwein 1988, Eq. 3.1):
+#  'bb1' (default, Barzilai & Borwein 1988, Eq. 3.1):
 #      gamma_k = s_{k-1}^T s_{k-1} / s_{k-1}^T y_{k-1}
-#      Interpretation: minimizes ||gamma * y - s||, i.e. finds the scalar
-#      alpha such that alpha * H_true * s ≈ s  =>  alpha ≈ 1/lambda_avg.
+#      Interpretation: gamma^{-1} minimizes || gamma^{-1} s - y ||, i.e. it is
+#      the least-squares fit of the secant equation H s = y with H = gamma^{-1} I.
+#      (BB2 instead minimizes || gamma y - s ||.)
+#      By Cauchy-Schwarz, BB1 >= BB2: it produces larger initial steps.
 #      Often produces larger steps and can accelerate convergence on
 #      ill-conditioned problems.
 #
@@ -348,7 +347,7 @@ def _compute_gamma(s_list, y_list, scaling='nocedal',
     ss = np.dot(s, s)   # s^T s
 
     if sy <= 1e-30 or yy <= 1e-30:
-        return 1.0
+        return 1.0 # not reached from lbfgs_optimize (empty memory uses 1/||g||)
 
     if scaling == 'nocedal':
         # Nocedal & Wright Eq. 9.6  (= BB2)
@@ -372,15 +371,22 @@ def _compute_gamma(s_list, y_list, scaling='nocedal',
 # 7. FLOP COUNTER  (derived from Algorithm 9.1 structure)
 # =============================================================================
 #
+# Convention (same as lib/qr_householder.py, Golub & Van Loan, Trefethen &
+# Bau): one flop = one floating-point addition OR multiplication, so a
+# length-m dot product or axpy costs 2m flops, and a product X^T v with
+# X in R^{m x n} costs 2mn flops.
+#
 # Per-iteration flop count of L-BFGS (dominant terms only):
 #
-#   Two-loop recursion:  (4 * mem + 1) * m      [Nocedal & Wright, p. 225]
-#   Gradient eval:        2 * m * n              [X^T w (mn) + X r (mn)]
-#   Exact LS:             m * n + 2 * m          [X^T p + two dots]
-#   Update s_k, y_k:      2 * m                  [two axpy]
+#   Two-loop recursion:  (8 * mem + 1) * m   [per stored pair: one dot (2m)
+#                                             and one axpy (2m) in each of the
+#                                             two loops; plus H_0 q (m)]
+#   Gradient eval:        4 * m * n          [X^T w (2mn) + X r (2mn)]
+#   Exact LS:             2 * m * n + 4 * m  [X^T p (2mn) + two dots (4m)]
+#   Update s_k, y_k:      2 * m              [alpha*p (m) + g_new - g (m)]
 #
-# Total per iteration ≈ (4*mem + 1)*m + 3*m*n + 4*m
-#                      = m * (4*mem + 3*n + 5)     flops
+# Total per iteration ≈ (8*mem + 1)*m + 6*m*n + 6*m
+#                      = m * (8*mem + 6*n + 7)     flops
 #
 # Storage: 2 * mem * m  floats for the (s_i, y_i) pairs
 #          + 4 * m  for current w, grad, s_k, y_k
@@ -394,7 +400,7 @@ def theoretical_cost(m, n, mem, n_iter,
 
     Parameters
     ----------
-    m, n, mem, n_iter : as before
+    m, n, mem, n_iter : problem dimensions, memory size, iteration count
     line_search       : 'exact' or 'wolfe'
     avg_wolfe_evals   : int, average number of (f, grad) re-evaluations
                         inside the Wolfe bracketing+zoom (typical: 2-4
@@ -405,17 +411,17 @@ def theoretical_cost(m, n, mem, n_iter,
     dict with keys 'flops_per_iter', 'total_flops',
                    'storage_floats', 'storage_MB', 'line_search'.
     """
-    two_loop   = (4 * mem + 1) * m          # Algorithm 9.1
-    grad_eval  = 2 * m * n                  # X(X^T w - y)
+    two_loop   = (8 * mem + 1) * m          # Algorithm 9.1
+    grad_eval  = 4 * m * n                  # X(X^T w - y)
     update     = 2 * m                      # s_k = alpha*p, y_k = g_new - g
 
     if line_search == 'exact':
-        # one X^T p (mn) + p^T H p assembly (m) + grad^T p (m) = mn + 2m
-        ls_cost = m * n + 2 * m
+        # one X^T p (2mn) + p^T p and grad^T p (2m each) = 2mn + 4m
+        ls_cost = 2 * m * n + 4 * m
     elif line_search == 'wolfe':
-        # Each trial point: f eval (mn) + grad eval (2mn) = 3 m n
-        # Plus dot products with p (~2m) per trial.
-        ls_cost = avg_wolfe_evals * (3 * m * n + 2 * m)
+        # Each trial point: f eval (2mn) + grad eval (4mn) = 6mn,
+        # plus the dot product with p (2m) and the trial update (2m).
+        ls_cost = avg_wolfe_evals * (6 * m * n + 4 * m)
     else:
         raise ValueError(f"Unknown line_search='{line_search}'")
 
@@ -462,14 +468,14 @@ def print_cost_table(m, n, mem_values=(3, 5, 10, 20, 40), n_iter=50):
 # because it is insensitive to occasional outliers from the OS).
 # =============================================================================
 
-def benchmark_lbfgs(X, y, lam, n_runs=5, **kwargs):
+def benchmark_lbfgs(X, y, lam, n_runs=10, **kwargs):
     """
     Run lbfgs_optimize n_runs times and return robust timing statistics.
 
     Parameters
     ----------
     X, y, lam : problem data
-    n_runs    : int, number of repetitions (>=3 recommended; default 5)
+    n_runs    : int, number of repetitions (>=3 recommended; default 10)
     **kwargs  : passed to lbfgs_optimize (verbose is forced to False)
 
     Returns
@@ -536,8 +542,8 @@ def lbfgs_optimize(X, y, lam,
     tol         : float
     tol_type    : str    'relative' or 'absolute'
     line_search : str    'exact' or 'wolfe'
-    h0_scaling  : str    'nocedal' (default, Eq. 9.6 = BB2)
-                         'bb1'     (Barzilai & Borwein 1988, Eq. 3.1)
+    h0_scaling  : str    'bb1'     (default, Barzilai & Borwein 1988, Eq. 3.1)
+                         'nocedal' (Eq. 9.6 = BB2)
                          'safeguarded' (BB2 clipped, Dai & Liao 2002)
     use_restart : bool   enable curvature-based restart (Liu & Nocedal 1989)
     restart_xi  : float  restart threshold in (0,1); default 0.2
@@ -688,7 +694,7 @@ def lbfgs_optimize(X, y, lam,
                 rho_list.pop(0)
             gamma_prev = ys / np.dot(y_k, y_k)   # update for next restart check
         elif ys <= 1e-16 and not did_restart and len(s_list) > 0:
-            # Negative curvature: full reset
+            # Negative or negligible curvature: full reset
             s_list.clear()
             y_list.clear()
             rho_list.clear()
