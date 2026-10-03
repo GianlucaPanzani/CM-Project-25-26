@@ -379,3 +379,7 @@ def compute_scaled_optimality(w, X, y, lam, sigma_max):
     augmented_residual_norm = np.hypot(np.linalg.norm(data_residual), lam * np.linalg.norm(w))
     augmented_matrix_norm = np.hypot(sigma_max, lam)
     return np.linalg.norm(gradient_value) / max(augmented_matrix_norm * augmented_residual_norm, np.finfo(float).tiny)
+
+def positive(values):
+    """Clip only displayed values so exact zeros are visible on log axes."""
+    return np.maximum(np.asarray(values, dtype=float), 1e-18)
