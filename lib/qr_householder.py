@@ -19,16 +19,15 @@ where ``X`` has shape ``(m, n)``, ``y`` has shape ``(n,)``, and
 
 No solver forms ``Q`` explicitly.  The public reflector-application
 routines compute the part of ``Q.T`` required by their solvers.  Generic
-dense QR costs ``O(rows*cols**2)``.  The intended cost of either structured
+dense QR costs ``O(rows*cols**2)``.  The cost of either structured
 factorization followed by back substitution is ``O(n*m**2 + m**2)``, which
 is quadratic in ``m`` for fixed ``n``.
 
-The timing returned by a solver covers its factorization, implicit or fused
-right-hand-side transformation, and triangular solve.  Construction done by
-the caller, and construction of ``[0; y]`` in the structure-based solver,
-is excluded.  The routines assume shape-compatible, finite, real
-floating-point inputs and nonsingular triangular factors; complete input
-validation is not performed.
+The timing returned by a solver covers the construction of its working
+arrays, its factorization, the implicit or fused right-hand-side
+transformation, and the triangular solve.  The routines assume
+shape-compatible, finite, real floating-point inputs and nonsingular
+triangular factors; complete input validation is not performed.
 
 References
 ----------
@@ -51,12 +50,14 @@ from lib.utils import build_augmented_system
 def naive_qr_solver(X, y, lam):
     """Solve a tall least-squares problem by compact dense Householder QR.
 
-    Parameters
+        Parameters
     ----------
-    A : ndarray, shape (rows, m)
-        Explicit real floating-point matrix, with ``rows >= m``.
-    b : ndarray, shape (rows,)
-        Right-hand side.  It is not modified.
+    X : ndarray, shape (m, n)
+        Real floating-point data matrix.
+    y : ndarray, shape (n,)
+        Right-hand side of the data equations.
+    lam : float
+        Positive regularization parameter.
 
     Returns
     -------
@@ -70,9 +71,9 @@ def naive_qr_solver(X, y, lam):
         The ``m`` normalized Householder vectors.  Reflector ``k`` has
         shape ``(rows-k,)``.
     tot_time : float
-        Seconds spent in factorization, implicit ``Q.T`` application, and
-        backward substitution.  Construction of ``A`` and ``b`` by the
-        caller is excluded.
+        Seconds spent in building the augmented system ``[X.T; lam*I_m]``
+        and ``[y; 0]``, factorization, implicit ``Q.T`` application, and
+        backward substitution.
 
     Notes
     -----
@@ -295,9 +296,9 @@ def qr_solver_structure_based(X, y, lam):
     reflectors : list of ndarray
         The ``m`` normalized compact reflectors, each of shape ``(n+1,)``.
     tot_time : float
-        Seconds spent in factorization, compact right-hand-side
-        transformation, and backward substitution.  Construction of
-        ``[0; y]`` is excluded.
+        Seconds spent in building ``[0; y]`` and ``R = lam*I_m``,
+        factorization, compact right-hand-side transformation, and
+        backward substitution.
 
     Notes
     -----
@@ -600,3 +601,150 @@ def compute_householder_vector_2d(v1: float, v2: float):
     u1 = reflector_v1 / reflector_norm
 
     return u1, u2, alpha
+
+# =============================================================================
+# 4. FLOP COUNTER  (derived from the structure of the three solvers)
+# =============================================================================
+#
+# Structure-based QR (step k acts on an (n+1) x (m-k+1) active block):
+#
+#   Reflector construction:  6 (n+1)           per step  -> 6 (n+1) m
+#   Block update H_k B_k:    4 (n+1)(m-k+1)    per step  -> ~2 (n+1) m^2
+#                            [u^T B (2(n+1)w) + rank-one update (2(n+1)w)]
+#   Q^T applied to [0; y]:   7 (n+1)           per step  -> 7 (n+1) m
+#   Back substitution:                                      m^2
+#
+#   Total ~ (2(n+1) + 1) m^2 + 13 (n+1) m              flops
+#
+# Dense Householder QR of the (m+n) x m augmented matrix, p = m+n
+# [Trefethen & Bau, Lecture 10]:
+#
+#   Factorization:  2 p m^2 - (2/3) m^3
+#   Q^T b:          4 p m - 2 m^2
+#   Back subst.:    m^2
+#
+# Normal equations solved with numpy.linalg.solve (LU, LAPACK gesv):
+#
+#   Form X X^T:     2 m^2 n        Form X y:   2 m n
+#   LU:             (2/3) m^3      Two triangular solves:  2 m^2
+# =============================================================================
+
+def qr_theoretical_cost(m, n, method='structure'):
+    """
+    Compute the theoretical flop count and storage of a direct solver.
+
+    Parameters
+    ----------
+    m, n   : int, problem dimensions (X has shape (m, n)).
+    method : 'structure', 'dense' or 'normal'
+             ('normal' = normal equations solved by LU, as numpy.linalg.solve).
+
+    Returns
+    -------
+    dict with keys 'phases' (dict of per-phase flops), 'total_flops',
+                   'storage_floats', 'storage_MB', 'method'.
+    """
+    if method == 'structure':
+        phases = {
+            'reflectors'   : 6 * (n + 1) * m,
+            'factorization': 2 * (n + 1) * m ** 2,
+            'apply_QT'     : 7 * (n + 1) * m,
+            'back_subst'   : m ** 2,
+        }
+        # R (m x m) + dense block X^T (n x m) + m reflectors of length n+1
+        storage_floats = m ** 2 + n * m + (n + 1) * m
+    elif method == 'dense':
+        p = m + n
+        phases = {
+            'factorization': 2 * p * m ** 2 - (2 * m ** 3) // 3,
+            'apply_QT'     : 4 * p * m - 2 * m ** 2,
+            'back_subst'   : m ** 2,
+        }
+        # explicit A (p x m) + reflectors of lengths p, p-1, ..., p-m+1
+        storage_floats = p * m + (m * (2 * p - m + 1)) // 2
+    elif method == 'normal':
+        phases = {
+            'form_gram'    : 2 * m ** 2 * n,
+            'form_rhs'     : 2 * m * n,
+            'factorization': (2 * m ** 3) // 3,
+            'back_subst'   : 2 * m ** 2,
+        }
+        # H = X X^T + lam^2 I (m x m) + right-hand side
+        storage_floats = m ** 2 + m
+    else:
+        raise ValueError(f"Unknown method='{method}'")
+
+    total_flops = sum(phases.values())
+    return {
+        'phases'         : phases,
+        'total_flops'    : total_flops,
+        'storage_floats' : storage_floats,
+        'storage_MB'     : storage_floats * 8 / 1e6,
+        'method'         : method,
+    }
+
+
+def print_qr_cost_table(n, m_values=(100, 250, 500, 1000, 2000, 4000)):
+    """
+    Print theoretical flop counts of the three direct solvers for several m.
+    """
+    print(f"\n{'='*78}")
+    print(f"  Theoretical cost of the direct solvers  (n={n})")
+    print(f"{'='*78}")
+    print(f"  {'m':>5}  {'structure':>14}  {'dense QR':>16}  {'normal eq.':>15}"
+          f"  {'NE/struct':>9}")
+    print(f"  {'-'*5}  {'-'*14}  {'-'*16}  {'-'*15}  {'-'*9}")
+    for m in m_values:
+        cs = qr_theoretical_cost(m, n, 'structure')['total_flops']
+        cd = qr_theoretical_cost(m, n, 'dense')['total_flops']
+        cn = qr_theoretical_cost(m, n, 'normal')['total_flops']
+        print(f"  {m:>5}  {cs:>14,}  {cd:>16,}  {cn:>15,}  {cn/cs:>8.1f}x")
+    print(f"{'='*78}\n")
+
+
+# =============================================================================
+# 5. ROBUST BENCHMARKING WRAPPER
+# =============================================================================
+#
+# Same protocol as benchmark_lbfgs in lib/lbfgs.py, so that the timings of
+# the iterative and direct solvers are directly comparable: one discarded
+# warm-up run, followed by n_runs timed runs summarised by their median
+# (insensitive to occasional outliers from the OS).
+# =============================================================================
+
+def benchmark_qr(solver, X, y, lam, n_runs=10):
+    """
+    Run a direct solver n_runs times and return robust timing statistics.
+
+    Parameters
+    ----------
+    solver : callable with signature solver(X, y, lam) whose LAST return
+             value is the elapsed time in seconds.  This holds for
+             naive_qr_solver, qr_solver_structure_based,
+             qr_solver_row_insertion and utils.solve_exact.
+    X, y, lam : problem data
+    n_runs : int, number of timed repetitions (default 10)
+
+    Returns
+    -------
+    out_last : tuple  outputs of the last run
+    stats    : dict   keys: 'n_runs', 'time_median', 'time_min',
+                            'time_mean', 'time_std', 'time_all'
+    """
+    times = np.empty(n_runs)
+
+    # Warm-up run (not counted): primes caches and BLAS thread pools.
+    out_last = solver(X, y, lam)
+
+    for i in range(n_runs):
+        out_last = solver(X, y, lam)
+        times[i] = out_last[-1]
+
+    return out_last, {
+        'n_runs'      : n_runs,
+        'time_median' : float(np.median(times)),
+        'time_min'    : float(times.min()),
+        'time_mean'   : float(times.mean()),
+        'time_std'    : float(times.std(ddof=1)) if n_runs > 1 else 0.0,
+        'time_all'    : times.tolist(),
+    }
