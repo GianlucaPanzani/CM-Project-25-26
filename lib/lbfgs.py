@@ -4,7 +4,7 @@ L-BFGS algorithm for the problem:
     min_w  f(w) = (1/2)||X^T w - y||^2 + (1/2) lambda^2 ||w||^2
 
 References:
-    - Nocedal & Wright, "Numerical Optimization", 2006
+    - Nocedal & Wright, "Numerical Optimization"
       - Algorithm 9.1  (Two-Loop Recursion)
       - Algorithm 9.2  (L-BFGS)
       - Eq. 9.6        (Initial scaling gamma_k)
@@ -12,23 +12,20 @@ References:
       - Eq. 3.7        (Strong Wolfe conditions)
     - Liu & Nocedal, "On the limited memory BFGS method for large scale
       optimization", Mathematical Programming 45, 1989
-      - Section 4      (Curvature-based restart criterion)
+      - Section 4      (Scaling of H_k^0, Eq. 4.1 = BB2)
 
-References (fonti esterne):
+Additional references:
     - Barzilai & Borwein, "Two-point step size gradient methods",
       IMA Journal of Numerical Analysis 8(1), 1988
-      - Eq. (3.1) BB1 scaling:  gamma = s^T s / s^T y
-      - Eq. (3.2) BB2 scaling:  gamma = s^T y / y^T y  (= Eq. 9.6 Nocedal)
-    - Dai & Liao, "R-linear convergence of the Barzilai and Borwein
-      gradient method", IMA J. Numerical Analysis 22, 2002
-      - safeguarded BB: clip gamma_k to [gamma_min, gamma_max]
+      - Eq. (6) BB1 scaling:  gamma = s^T s / s^T y
+      - Eq. (5) BB2 scaling:  gamma = s^T y / y^T y  (= Eq. 9.6 Nocedal)
 
 Implemented components:
     1. Two-loop recursion          (Nocedal & Wright, Algorithm 9.1)
     2. Exact line search           (Nocedal & Wright, Eq. 3.25)
     3. Strong Wolfe line search    (Nocedal & Wright, Eq. 3.7)
     4. L-BFGS main loop            (Nocedal & Wright, Algorithm 9.2)
-    5. Curvature-based restart     (Liu & Nocedal 1989, Section 4)
+    5. Curvature-based restart     (heuristic safeguard)
     6. Adaptive H0 scaling         (Barzilai & Borwein 1988)
     7. Flop counter                (derived from Algorithm 9.1 structure;
                                     supports both 'exact' and 'wolfe' LS)
@@ -247,10 +244,10 @@ def strong_wolfe_line_search(w, p, f_0, grad_0, dg_0,
 # 5. CURVATURE-BASED RESTART
 # =============================================================================
 #
-# Source: Liu & Nocedal (1989), Section 4.
+# Heuristic safeguard (not taken from a specific reference).
 #
 # The standard L-BFGS only skips a pair when y_k^T s_k <= 0 (negative
-# curvature). Liu & Nocedal (1989) suggest a stronger criterion: reset the
+# curvature). We add a stronger, heuristic criterion: reset the
 # entire memory when the curvature ratio of the new pair drops sharply
 # relative to the same ratio of the previously stored pair, i.e. when:
 #
@@ -268,7 +265,7 @@ def strong_wolfe_line_search(w, p, f_0, grad_0, dg_0,
 
 def _should_restart(s_k, y_k, ys, gamma_prev, xi=0.2):
     """
-    Curvature-based restart criterion (Liu & Nocedal 1989, Section 4).
+    Curvature-based restart criterion.
 
     Returns True if the memory should be reset before storing (s_k, y_k).
 
@@ -299,10 +296,10 @@ def _should_restart(s_k, y_k, ys, gamma_prev, xi=0.2):
 #
 #  'nocedal':
 #      gamma_k = s_{k-1}^T y_{k-1} / y_{k-1}^T y_{k-1}           [Eq. 9.6]
-#      This is also known as the BB2 step (Barzilai & Borwein 1988, Eq. 3.2).
+#      This is also known as the BB2 step (Barzilai & Borwein 1988, Eq. (5)).
 #      It estimates the inverse curvature of the Hessian along s_{k-1}.
 #
-#  'bb1' (default, Barzilai & Borwein 1988, Eq. 3.1):
+#  'bb1' (default, Barzilai & Borwein 1988, Eq. (6)):
 #      gamma_k = s_{k-1}^T s_{k-1} / s_{k-1}^T y_{k-1}
 #      Interpretation: gamma^{-1} minimizes || gamma^{-1} s - y ||, i.e. it is
 #      the least-squares fit of the secant equation H s = y with H = gamma^{-1} I.
@@ -311,14 +308,11 @@ def _should_restart(s_k, y_k, ys, gamma_prev, xi=0.2):
 #      Often produces larger steps and can accelerate convergence on
 #      ill-conditioned problems.
 #
-#  'safeguarded' (Dai & Liao 2002):
+#  'safeguarded':
 #      gamma_k = clip( BB2_k, gamma_min, gamma_max )
 #      Prevents gamma from becoming extremely large or small due to
 #      numerical noise, which can destabilize the two-loop recursion.
 #      Default bounds: gamma_min=1e-10, gamma_max=1e10.
-#
-# Source: Barzilai & Borwein (1988) is external to the prof's references.
-#         Nocedal & Wright Eq. 9.6 covers 'nocedal' / BB2.
 # =============================================================================
 
 def _compute_gamma(s_list, y_list, scaling='nocedal',
@@ -354,11 +348,11 @@ def _compute_gamma(s_list, y_list, scaling='nocedal',
         return sy / yy
 
     elif scaling == 'bb1':
-        # Barzilai & Borwein (1988), Eq. 3.1
+        # Barzilai & Borwein (1988), Eq. 6
         return ss / sy
 
     elif scaling == 'safeguarded':
-        # BB2 clipped to [gamma_min, gamma_max]  (Dai & Liao 2002)
+        # BB2 clipped to [gamma_min, gamma_max]
         gamma = sy / yy
         return float(np.clip(gamma, gamma_min, gamma_max))
 
@@ -542,10 +536,10 @@ def lbfgs_optimize(X, y, lam,
     tol         : float
     tol_type    : str    'relative' or 'absolute'
     line_search : str    'exact' or 'wolfe'
-    h0_scaling  : str    'bb1'     (default, Barzilai & Borwein 1988, Eq. 3.1)
+    h0_scaling  : str    'bb1'     (default, Barzilai & Borwein 1988, Eq. (6))
                          'nocedal' (Eq. 9.6 = BB2)
-                         'safeguarded' (BB2 clipped, Dai & Liao 2002)
-    use_restart : bool   enable curvature-based restart (Liu & Nocedal 1989)
+                         'safeguarded' (BB2 clipped to [gamma_min, gamma_max])
+    use_restart : bool   enable curvature-based restart (heuristic safeguard)
     restart_xi  : float  restart threshold in (0,1); default 0.2
     w_star      : ndarray (m,) or None
                   Optional reference solution. When provided, the iterate
@@ -671,7 +665,7 @@ def lbfgs_optimize(X, y, lam,
         y_k = grad_new - grad
         ys  = np.dot(y_k, s_k)
 
-        # --- Curvature-based restart (Liu & Nocedal 1989, Sec. 4) ---
+        # --- Curvature-based restart ---
         did_restart = False
         if use_restart and ys > 1e-10 and len(s_list) > 0:
             if _should_restart(s_k, y_k, ys, gamma_prev, xi=restart_xi):
