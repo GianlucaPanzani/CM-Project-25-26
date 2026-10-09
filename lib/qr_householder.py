@@ -50,7 +50,7 @@ from lib.utils import build_augmented_system
 def naive_qr_solver(X, y, lam):
     """Solve a tall least-squares problem by compact dense Householder QR.
 
-        Parameters
+    Parameters
     ----------
     X : ndarray, shape (m, n)
         Real floating-point data matrix.
@@ -140,6 +140,8 @@ def qr_factorize_naive(A):
 def apply_QT(u_list, b):
     """Apply ``Q.T`` from compact trailing Householder vectors.
 
+    Implicit product of Trefethen & Bau, Algorithm 10.2.
+
     Parameters
     ----------
     u_list : sequence of ndarray
@@ -160,10 +162,28 @@ def apply_QT(u_list, b):
     skipped.  Dimensions are assumed compatible rather than validated.
     The cost is proportional to the total number of stored entries.
     """
-
-    # Applying the stored order gives Q^T; reversing that order gives Q.
     result = b.copy()
     for k, u in enumerate(u_list):
+        u_squared_norm = np.dot(u, u)
+        if u_squared_norm == 0.0:
+            continue
+        coefficient = 2.0 * np.dot(u, result[k:]) / u_squared_norm
+        result[k:] -= coefficient * u
+
+    return result
+
+
+def apply_Q(u_list, x):
+    """Apply ``Q`` from compact trailing Householder vectors.
+
+    Implicit product of Trefethen & Bau, Algorithm 10.3: since
+    ``Q = H_0 H_1 ... H_(r-1)``, the reflectors stored by the factorization
+    are applied to ``x`` in reverse order.  ``Q`` is never formed; the cost
+    is proportional to the total number of stored entries.
+    """
+    result = x.copy()
+    for k in reversed(range(len(u_list))):
+        u = u_list[k]
         u_squared_norm = np.dot(u, u)
         if u_squared_norm == 0.0:
             continue
@@ -289,10 +309,9 @@ def qr_solver_structure_based(X, y, lam):
     w : ndarray, shape (m,)
         Computed regularized least-squares solution.
     c : ndarray, shape (m+n,)
-        Work vector whose first ``m`` entries are the leading entries of
-        ``Q.T @ [0; y]`` used by the triangular solve.  In the current
-        implementation the final transformed ``n`` entries are not copied
-        back, so ``c[m:]`` remains equal to ``y``.
+        Transformed right-hand side Q.T @ [0; y]. Its first m entries are
+        used by the triangular solve; the trailing n entries are Q_2^T [0; y],
+        whose norm is the minimal residual.
     reflectors : list of ndarray
         The ``m`` normalized compact reflectors, each of shape ``(n+1,)``.
     tot_time : float
@@ -392,11 +411,8 @@ def apply_structure_based_QT(u_list, b_perm, m):
     Returns
     -------
     c : ndarray, shape (m+n,)
-        Copy of ``b_perm`` whose first ``m`` entries equal the leading
-        entries of ``Q.T @ b_perm``.  The current work-buffer update does
-        not copy the final transformed lower part into ``c``; consequently
-        ``c[m:]`` remains equal to ``b_perm[m:]`` and must not be interpreted
-        as the lower part of the complete orthogonal product.
+        The full product Q.T @ b_perm. Its first m entries feed the triangular solve;
+        the trailing n entries are Q_2^T b_perm, whose norm is the minimal residual.
 
     Notes
     -----
@@ -426,9 +442,32 @@ def apply_structure_based_QT(u_list, b_perm, m):
         c[k] = active_vector[0]
         y_transformed = active_vector[1:]
 
+    # Copy back the transformed tail, so that c = Q^T b_perm in all m+n entries
+    c[m:] = y_transformed
+
     return c
 
+def apply_structure_based_Q(u_list, x_perm, m):
+    """Apply ``Q`` of the structure-based factorization to a permuted vector.
 
+    Implicit product of Trefethen & Bau, Algorithm 10.3: the compact
+    reflectors are applied in reverse order.  Reflector ``k`` acts on the
+    full-system coordinates ``k`` and ``m:``.  Costs ``O(m*n)`` and does not
+    form ``Q``.
+    """
+    result = x_perm.copy()
+    active = np.empty(result.size - m + 1, dtype=result.dtype)
+    for k in reversed(range(len(u_list))):
+        u = u_list[k]
+        u_squared_norm = np.dot(u, u)
+        if u_squared_norm == 0.0:
+            continue
+        active[0] = result[k]
+        active[1:] = result[m:]
+        active -= 2.0 * u * (u @ active) / u_squared_norm
+        result[k] = active[0]
+        result[m:] = active[1:]
+    return result
 
 # =============================================================================
 # 3. ROW INSERTION 2D QR SOLVER

@@ -379,8 +379,10 @@ def _compute_gamma(s_list, y_list, scaling='nocedal',
 #   Exact LS:             2 * m * n + 4 * m  [X^T p (2mn) + two dots (4m)]
 #   Update s_k, y_k:      2 * m              [alpha*p (m) + g_new - g (m)]
 #
-# Total per iteration ≈ (8*mem + 1)*m + 6*m*n + 6*m
-#                      = m * (8*mem + 6*n + 7)     flops
+#   Objective value:      2 * m * n          [X^T w, stagnation check]
+#
+# Total per iteration ≈ (8*mem + 1)*m + 8*m*n + 6*m
+#                      = m * (8*mem + 8*n + 7)     flops
 #
 # Storage: 2 * mem * m  floats for the (s_i, y_i) pairs
 #          + 4 * m  for current w, grad, s_k, y_k
@@ -391,6 +393,8 @@ def theoretical_cost(m, n, mem, n_iter,
                      line_search='exact', avg_wolfe_evals=3):
     """
     Compute theoretical flop count and storage for L-BFGS.
+    Upper-bound estimate: assumes a full memory of mem pairs at every iteration;
+    see actual_cost for the work really performed.
 
     Parameters
     ----------
@@ -410,8 +414,9 @@ def theoretical_cost(m, n, mem, n_iter,
     update     = 2 * m                      # s_k = alpha*p, y_k = g_new - g
 
     if line_search == 'exact':
-        # one X^T p (2mn) + p^T p and grad^T p (2m each) = 2mn + 4m
-        ls_cost = 2 * m * n + 4 * m
+        # one X^T p (2mn) + p^T p and grad^T p (2m each) = 2mn + 4m,
+        # plus the objective value used by the stagnation check (2mn)
+        ls_cost = 2 * m * n + 4 * m + 2 * m * n
     elif line_search == 'wolfe':
         # Each trial point: f eval (2mn) + grad eval (4mn) = 6mn,
         # plus the dot product with p (2m) and the trial update (2m).
@@ -450,6 +455,29 @@ def print_cost_table(m, n, mem_values=(3, 5, 10, 20, 40), n_iter=50):
               f"{c['total_flops']:>14,}  "
               f"{c['storage_MB']:>12.3f}")
     print(f"{'='*70}\n")
+
+def actual_cost(history, m, n, line_search='exact'):
+    """Flops actually performed by a completed L-BFGS run (dominant terms).
+
+    Unlike theoretical_cost, which assumes a full memory at every iteration,
+    the two-loop term uses the number of pairs really stored at each
+    iteration (history['mem']): fewer than m_history while the memory fills
+    up and after a restart.  It also includes the objective value computed
+    at each iteration (2mn), used by the stagnation check.  Same flop
+    convention as theoretical_cost.
+    """
+    mem = np.asarray(history['mem'], dtype=float)
+    k = mem.size
+    two_loop = float(np.sum((8 * mem + 1) * m))
+    if line_search == 'exact':
+        # gradient (4mn) + exact LS (2mn + 4m) + objective (2mn) + update (2m)
+        rest = k * (4 * m * n + (2 * m * n + 4 * m) + 2 * m * n + 2 * m)
+    else:
+        evals = np.asarray(history['ls_evals'], dtype=float)
+        rest = float(np.sum(evals * (6 * m * n + 4 * m))) + k * 2 * m
+    total = int(round(two_loop + rest))
+    return {'n_iter': k, 'mean_pairs': float(mem.mean()) if k else 0.0,
+            'total_flops': total, 'flops_per_iter': total / max(k, 1)}
 
 # =============================================================================
 # 8. ROBUST BENCHMARKING WRAPPER
@@ -508,13 +536,13 @@ def benchmark_lbfgs(X, y, lam, n_runs=10, **kwargs):
 # =============================================================================
 
 def lbfgs_optimize(X, y, lam,
-                   m_history=10,
+                   m_history=12,
                    max_iter=1000,
                    tol=1e-14,
                    tol_type='relative',
                    line_search='exact',
                    h0_scaling='bb1',
-                   use_restart=True,
+                   use_restart=False,
                    restart_xi=0.2,
                    w_star=None,
                    f_star=None,
@@ -531,7 +559,8 @@ def lbfgs_optimize(X, y, lam,
     X           : ndarray (m, n)
     y           : ndarray (n,)
     lam         : float
-    m_history   : int    number of (s,y) pairs stored [3..20]
+    m_history   : int    number of (s,y) pairs stored; default 12, the
+                  effective rank n of the ML-CUP problem
     max_iter    : int
     tol         : float
     tol_type    : str    'relative' or 'absolute'
@@ -539,7 +568,8 @@ def lbfgs_optimize(X, y, lam,
     h0_scaling  : str    'bb1'     (default, Barzilai & Borwein 1988, Eq. (6))
                          'nocedal' (Eq. 9.6 = BB2)
                          'safeguarded' (BB2 clipped to [gamma_min, gamma_max])
-    use_restart : bool   enable curvature-based restart (heuristic safeguard)
+    use_restart : bool   enable curvature-based restart (heuristic safeguard);
+                  default False
     restart_xi  : float  restart threshold in (0,1); default 0.2
     w_star      : ndarray (m,) or None
                   Optional reference solution. When provided, the iterate
@@ -601,6 +631,7 @@ def lbfgs_optimize(X, y, lam,
         'alpha'     : [],
         'ls_evals'  : [],
         'restarts'  : [],   # iteration indices where restart occurred
+        'mem'       : [],   # stored pairs used by the two-loop at each iteration
     }
     if w_star is not None:
         history['dist_to_opt'] = [float(np.linalg.norm(w - w_star))]
@@ -642,6 +673,7 @@ def lbfgs_optimize(X, y, lam,
         # --- Descent direction ---
         Hg = lbfgs_two_loop(grad, s_list, y_list, rho_list, gamma_k)
         p  = -Hg
+        history['mem'].append(len(s_list))
 
         dg = np.dot(grad, p)
         if dg >= 0:          # safeguard: revert to steepest descent
@@ -667,7 +699,8 @@ def lbfgs_optimize(X, y, lam,
 
         # --- Curvature-based restart ---
         did_restart = False
-        if use_restart and ys > 1e-10 and len(s_list) > 0:
+        ok = ys > 1e-10 * np.linalg.norm(s_k) * np.linalg.norm(y_k)
+        if use_restart and ok and len(s_list) > 0:
             if _should_restart(s_k, y_k, ys, gamma_prev, xi=restart_xi):
                 s_list.clear()
                 y_list.clear()
@@ -678,7 +711,7 @@ def lbfgs_optimize(X, y, lam,
                     print(f"  [restart] iter {k}: curvature dropped, memory cleared")
 
         # --- Standard skip / store logic ---
-        if ys > 1e-10:
+        if ok:
             s_list.append(s_k)
             y_list.append(y_k)
             rho_list.append(1.0 / ys)
@@ -687,8 +720,8 @@ def lbfgs_optimize(X, y, lam,
                 y_list.pop(0)
                 rho_list.pop(0)
             gamma_prev = ys / np.dot(y_k, y_k)   # update for next restart check
-        elif ys <= 1e-16 and not did_restart and len(s_list) > 0:
-            # Negative or negligible curvature: full reset
+        elif ys <= 0 and not did_restart and len(s_list) > 0:
+            # Negative curvature (y^T s <= 0): full reset
             s_list.clear()
             y_list.clear()
             rho_list.clear()
