@@ -21,10 +21,6 @@ Matrices:
 
 Hessian (constant):
     H = nabla^2 f(w) = X X^T + lambda^2 I_m
-
-References:
-    - Nocedal & Wright, "Numerical Optimization", 2006
-    - Trefethen & Bau, "Numerical Linear Algebra", 1997
 ================================================================================
 """
 
@@ -383,3 +379,12 @@ def compute_scaled_optimality(w, X, y, lam, sigma_max):
 def positive(values):
     """Clip only displayed values so exact zeros are visible on log axes."""
     return np.maximum(np.asarray(values, dtype=float), 1e-18)
+
+# =============================================================================
+# 8. SDV REFERENCE SOLUTION (for verification)
+# =============================================================================
+def svd_reference(X, y, lam):
+    """Reference solution of the Tikhonov problem from the thin SVD of X."""
+    U, s, Vt = np.linalg.svd(X, full_matrices=False)
+    w = U @ ((s / (s**2 + lam**2)) * (Vt @ y))
+    return w, compute_loss(w, X, y, lam)
