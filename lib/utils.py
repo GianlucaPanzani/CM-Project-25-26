@@ -388,3 +388,37 @@ def svd_reference(X, y, lam):
     U, s, Vt = np.linalg.svd(X, full_matrices=False)
     w = U @ ((s / (s**2 + lam**2)) * (Vt @ y))
     return w, compute_loss(w, X, y, lam)
+
+# =============================================================================
+# 9. SYNTHETIC PROBLEMS WITH A PRESCRIBED SPECTRUM
+# =============================================================================
+def make_spectral_problem(m, n, sigma_max=75.74, rho=20.0, seed=0):
+    """Synthetic tall matrix with prescribed, geometrically spaced singular values.
+
+    X = U diag(s) V^T, where U and V come from the thin SVD of a Gaussian
+    matrix and s is geometrically spaced from sigma_max down to sigma_max/rho.
+    The default sigma_max is the largest singular value of the ML-CUP matrix,
+    so that with lam = 0.5 every instance has kappa(Xhat) = 151.5, as the
+    real problem: the effect of the dimensions is separated from that of the
+    conditioning.
+
+    Parameters
+    ----------
+    m, n      : int, with 0 < n < m
+    sigma_max : float, largest singular value
+    rho       : float, ratio sigma_max / sigma_min
+    seed      : int, seed of the local random generator
+
+    Returns
+    -------
+    X : ndarray (m, n)  synthetic data matrix
+    y : ndarray (n,)    standard normal right-hand side
+    """
+    if not 0 < n < m:
+        raise ValueError('The synthetic problem requires 0 < n < m.')
+    rng = np.random.default_rng(seed)
+    U, _, Vt = np.linalg.svd(rng.standard_normal((m, n)), full_matrices=False)
+    s = np.geomspace(sigma_max, sigma_max / rho, n)
+    X = U @ np.diag(s) @ Vt
+    y = rng.standard_normal(n)
+    return X, y

@@ -56,7 +56,7 @@ LBFGS_OPTIONS = dict(
 TOLERANCES = np.array([1e-2, 1e-4, 1e-6, 1e-8, 1e-10, 1e-12, 1e-14])
 LAMBDAS = np.unique(np.r_[np.logspace(-8, 2, 11), LAMBDA])
 M_SIZES = np.array([100, 250, 500, 1000, 2000, 4000])
-N_SIZES = np.array([4, 8, 12, 24, 48, 96])
+N_SIZES = np.array([5, 12, 25, 50, 100, 150, 200, 250, 300])
 
 METHODS = ('L-BFGS', 'Structure-based QR')
 COLORS = {'L-BFGS': 'steelblue', 'Structure-based QR': 'darkorange'}
@@ -372,62 +372,8 @@ def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repea
 
     return pd.DataFrame(rows), solutions
 
-
 # =============================================================================
-# 6. SYNTHETIC PROBLEMS WITH A PRESCRIBED SPECTRUM
-# =============================================================================
-
-
-def make_spectral_problem(m_size, n_size, sigma_min=1.0, sigma_max=10.0, seed=SEED):
-    """Generate a tall matrix with prescribed singular values and a random target.
-
-    Parameters
-    ----------
-    m_size : int
-        Number of rows of X, equal to the number of unknown coefficients.
-    n_size : int
-        Number of columns of X; must satisfy 0 < n_size < m_size.
-    sigma_min : float, default=1.0
-        Smallest prescribed singular value when n_size > 1.
-    sigma_max : float, default=10.0
-        Largest prescribed singular value. For n_size = 1, this is the
-        only singular value.
-    seed : int or None, default=SEED
-        Seed for the local NumPy generator. The shared default is 42.
-
-    Returns
-    -------
-    X_synthetic : ndarray, shape (m_size, n_size)
-        Matrix U diag(sigma) V^T, with orthonormal columns in U, orthogonal
-        V, and singular values geometrically spaced between the endpoints.
-    y_synthetic : ndarray, shape (n_size,)
-        Standard normal right-hand side drawn from the same generator.
-
-    Raises
-    ------
-    ValueError
-        If the dimensions do not satisfy 0 < n_size < m_size.
-
-    Notes
-    -----
-    QR factorizations of Gaussian matrices produce the orthonormal factors.
-    Positive endpoints with sigma_min <= sigma_max are assumed. Construction
-    is reproducible for a fixed seed and is performed outside solver timings.
-    """
-    if not 0 < n_size < m_size:
-        raise ValueError('The synthetic experiment requires 0 < n < m.')
-    rng = np.random.default_rng(seed)
-    with blas_context():
-        U, _ = np.linalg.qr(rng.standard_normal((m_size, n_size)), mode='reduced')
-        V, _ = np.linalg.qr(rng.standard_normal((n_size, n_size)))
-        spectrum = np.geomspace(sigma_max, sigma_min, n_size)
-        X_synthetic = (U * spectrum) @ V.T
-    y_synthetic = rng.standard_normal(n_size)
-    return X_synthetic, y_synthetic
-
-
-# =============================================================================
-# 7. RUNTIME PLOTS
+# 6. RUNTIME PLOTS
 # =============================================================================
 
 
