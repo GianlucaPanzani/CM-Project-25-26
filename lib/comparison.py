@@ -43,13 +43,13 @@ LAMBDA = 0.5
 TARGET_W_ERROR = 1e-6
 TARGET_GRADIENT = 1e-8
 LBFGS_OPTIONS = dict(
-    m_history=10,
+    m_history=12,
     max_iter=2000,
-    tol=1e-10,
+    tol=1e-14,
     tol_type='relative',
     line_search='exact',
     h0_scaling='bb1',
-    use_restart=True,
+    use_restart=False,
     verbose=False,
 )
 

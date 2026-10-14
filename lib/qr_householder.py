@@ -39,7 +39,11 @@ import math
 import time
 import numpy as np
 from lib.utils import build_augmented_system
-
+try:
+    from threadpoolctl import threadpool_info, threadpool_limits
+except ImportError:
+    threadpool_info = None
+    threadpool_limits = None
 
 
 
@@ -772,18 +776,19 @@ def benchmark_qr(solver, X, y, lam, n_runs=10):
     """
     times = np.empty(n_runs)
 
-    # Warm-up run (not counted): primes caches and BLAS thread pools.
-    out_last = solver(X, y, lam)
-
-    for i in range(n_runs):
+    with threadpool_limits(limits=1, user_api='blas'):
+        # Warm-up run (not counted): primes caches and BLAS thread pools.
         out_last = solver(X, y, lam)
-        times[i] = out_last[-1]
 
-    return out_last, {
-        'n_runs'      : n_runs,
-        'time_median' : float(np.median(times)),
-        'time_min'    : float(times.min()),
-        'time_mean'   : float(times.mean()),
-        'time_std'    : float(times.std(ddof=1)) if n_runs > 1 else 0.0,
-        'time_all'    : times.tolist(),
-    }
+        for i in range(n_runs):
+            out_last = solver(X, y, lam)
+            times[i] = out_last[-1]
+
+        return out_last, {
+            'n_runs'      : n_runs,
+            'time_median' : float(np.median(times)),
+            'time_min'    : float(times.min()),
+            'time_mean'   : float(times.mean()),
+            'time_std'    : float(times.std(ddof=1)) if n_runs > 1 else 0.0,
+            'time_all'    : times.tolist(),
+        }

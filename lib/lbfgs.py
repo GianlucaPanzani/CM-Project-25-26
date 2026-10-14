@@ -37,6 +37,11 @@ Implemented components:
 import numpy as np
 import time
 from lib.utils import compute_loss, compute_gradient
+try:
+    from threadpoolctl import threadpool_info, threadpool_limits
+except ImportError:
+    threadpool_info = None
+    threadpool_limits = None
 
 
 # =============================================================================
@@ -513,23 +518,24 @@ def benchmark_lbfgs(X, y, lam, n_runs=10, **kwargs):
     w_last = None
     h_last = None
 
-    # Warm-up run (not counted): primes caches, triggers any first-time
-    # imports/allocations. Crucial when reporting sub-millisecond timings.
-    w_last, h_last, _ = lbfgs_optimize(X, y, lam, **kwargs)
+    with threadpool_limits(limits=1, user_api='blas'):
+        # Warm-up run (not counted): primes caches, triggers any first-time
+        # imports/allocations. Crucial when reporting sub-millisecond timings.
+        w_last, h_last, _ = lbfgs_optimize(X, y, lam, **kwargs)
 
-    for i in range(n_runs):
-        w_last, h_last, t = lbfgs_optimize(X, y, lam, **kwargs)
-        times[i] = t
+        for i in range(n_runs):
+            w_last, h_last, t = lbfgs_optimize(X, y, lam, **kwargs)
+            times[i] = t
 
-    return w_last, h_last, {
-        'n_iter'      : len(h_last['f']) - 1,
-        'n_runs'      : n_runs,
-        'time_median' : float(np.median(times)),
-        'time_min'    : float(times.min()),
-        'time_mean'   : float(times.mean()),
-        'time_std'    : float(times.std(ddof=1)) if n_runs > 1 else 0.0,
-        'time_all'    : times.tolist(),
-    }
+        return w_last, h_last, {
+            'n_iter'      : len(h_last['f']) - 1,
+            'n_runs'      : n_runs,
+            'time_median' : float(np.median(times)),
+            'time_min'    : float(times.min()),
+            'time_mean'   : float(times.mean()),
+            'time_std'    : float(times.std(ddof=1)) if n_runs > 1 else 0.0,
+            'time_all'    : times.tolist(),
+        }
 
 # =============================================================================
 # 4. L-BFGS MAIN LOOP  (Nocedal & Wright, Algorithm 9.2)  — Enhanced

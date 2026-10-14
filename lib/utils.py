@@ -166,10 +166,10 @@ def solve_exact(X, y, lam):
     A = X @ X.T + (lam ** 2) * np.eye(m)
     b = X @ y
 
-    start_time = time.time()
+    start_time = time.perf_counter()
 
     w_baseline = np.linalg.solve(A, b)
-    baseline_time = time.time() - start_time
+    baseline_time = time.perf_counter() - start_time
 
     f_baseline = compute_loss(w_baseline, X, y, lam)
 
