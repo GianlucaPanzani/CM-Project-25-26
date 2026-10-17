@@ -114,7 +114,7 @@ complement of $\operatorname{col}(Q_1)$. Then
     =
     \norm{
         \begin{bmatrix}
-            R w - c \\ d
+            R w - c \\ -d
         \end{bmatrix}
     }^2
     =
@@ -212,7 +212,7 @@ squaring introduced by the normal equations.
     O(pm^2) = O((n+m)m^2)
 \end{equation}
 
-\noindent units of time.
+\noindent floating-point operations.
 
 \noindent Once the factorization is available, computing the transformed right-hand side $c=Q_1^T b$ requires at most $O(pm)$ additional operations, whereas solving the upper triangular system $Rw=c$ by back-substitution costs $O(m^2)$.
 Therefore, the factorization dominates the overall computational cost. Since $p=n+m$, treating the augmented matrix $A$ as a generic dense matrix gives the previously declared $O((n+m)m^2) = O(nm^2+m^3)$ complexity.
@@ -293,9 +293,9 @@ avoid overflow or underflow in the norm calculation, define
     \end{bmatrix}.
 \end{equation}
 
-\noindent Thus the convention is $\operatorname{sign}(0)=1$. The sign choice makes the first component of $v$ an addition of like-signed quantities, thereby avoiding subtractive cancellation. If $z=0$, the code returns $u=0$ and $\alpha=0$ as an identity-reflector sentinel.
+\noindent Here $\operatorname{sign}(0)=1$, as in the definition of $\sigma$. The sign choice makes the first component of $v$ an addition of like-signed quantities, thereby avoiding subtractive cancellation. If $z=0$, the code returns $u=0$ and $\alpha=0$ as an identity-reflector sentinel.
 
-\noindent At step $i$, the current active column is therefore mapped to a vector whose entries below position $i$ are zero, while its $i$-th entry becomes $\alpha$.
+\noindent At step $k$, the current active column is therefore mapped to a vector whose entries below position $k$ are zero, while its $k$-th entry becomes $\alpha$.
 
 \subsection{Dense Householder QR}
 
@@ -384,6 +384,14 @@ $m$ entries are
 
 \noindent This is the right-hand side of the triangular system $Rw=c$.
 
+\noindent The stored reflectors also give products with $Q$ itself. Since
+$Q^T = H_m \cdots H_1$ and $Q = H_1 \cdots H_m$,
+a product $Q^T x$ applies the reflectors in factorization order, as above,
+while a product $Q x$ applies the same reflectors in reverse order, from
+$H_m$ to $H_1$~\cite[Algorithms~10.2 and~10.3]{trefethen1997}.
+Both cost a number of operations proportional to the stored entries, i.e.\
+$O(pm)$, and neither forms $Q$.
+
 \begin{algorithm}[H]
 \caption{Compact Dense Householder QR}
 \label{alg:householder_dense}
@@ -453,6 +461,16 @@ column of $B_k$. The update
 algorithm stores $m$ reflectors of fixed length $n+1$, rather than the
 decreasing reflectors of length $m+n-k+1$ used by dense QR.
 
+\noindent This compact form is exact, not an approximation. At step $k$, the
+entries of column $k$ in rows $k+1,\dots,m$ of the $\lambda I_m$ block are
+still zero: they are zero in $R_0=\lambda I_m$, and no previous step has
+modified them, since reflector $j<k$ acts only on row $j$ of $R$ and on the
+$n$ rows of $Z$. The only nonzero entries below the diagonal of column $k$
+are therefore the $n$ entries of $Z_{:,k}$, and a reflector supported on row
+$k$ and on the rows of $Z$ annihilates all of them while leaving rows
+$k+1,\dots,m$ of $R$ untouched. The sparsity of the identity block is thus
+preserved throughout the factorization.
+
 \noindent The same reflectors are applied to the permuted right-hand side without
 forming $Q$. At step $k$, only the leading coordinate $c_k$ and the current
 dense tail $z\in\R^n$ are active:
@@ -467,12 +485,14 @@ dense tail $z\in\R^n$ are active:
     \quad z\leftarrow q_{2:n+1}.
 \end{equation}
 
-\noindent After the last update, $c\in\R^m$ is the leading part of
-$Q^T\tilde b$ required by the triangular solve. In the current Python work
-buffer, these first $m$ components are returned correctly, but the final
-transformed tail $z$ is not copied back; consequently, the last $n$ entries
-of the returned buffer must not be interpreted as the complete lower part of
-$Q^T\tilde b$.
+\noindent After the last update, $c\in\R^m$ is the leading part
+$Q_1^T\tilde b$ of $Q^T\tilde b$, which is all the triangular solve requires,
+and the final tail $z$ is the trailing part $d = Q_2^T\tilde b$. The
+implementation returns both, so the full product $Q^T\tilde b$ is available;
+by Eq.~\eqref{eq:qr_residual_split}, $\norm{d}$ is the minimal residual norm.
+Products with $Q$ are obtained in the same compact way, applying the reflectors
+$u_m, \ldots, u_1$ in reverse order to the coordinate pairs $(x_k, x_{m+1:m+n})$.
+Both products cost $O(nm)$ and never form $Q$.
 
 \begin{algorithm}[H]
 \caption{Structure-Based Householder QR by Columns}
@@ -498,371 +518,191 @@ $Q^T\tilde b$.
         \EndIf
         \State $c_k\gets q_1$; \quad $z\gets q_{2:n+1}$
     \EndFor
+    \State $d\gets z$ \Comment{Trailing part $Q_2^T\tilde b$; $\norm{d}$ is the minimal residual}
     \State $w\gets\Call{BackSubstitution}{R,c}$
-    \State \Return $R,w,c$ and the stored reflectors
+    \State \Return $R,w,[c;\,d]$ and the stored reflectors
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{Two-Dimensional Householder Row Insertion}
-\label{sec:row_insertion_householder}
+% \subsection{Two-Dimensional Householder Row Insertion}
+% \label{sec:row_insertion_householder}
 
-\noindent A second implementation is based on the mathematically valid idea of
-inserting the remaining $n$ rows of $X^T$ one at a time.
-At iteration $i$, let $x_i^T = [a_1,\ldots,a_m]$ be the new data row extracted from $X^T$ and $y_i$ its corresponding right-hand-side entry. We maintain the current upper triangular factor $R_{i-1} \in \mathbb{R}^{m \times m}$ and the transformed right-hand side $c_{i-1} \in \mathbb{R}^{m}$.
+% \noindent A second implementation is based on the mathematically valid idea of
+% inserting the remaining $n$ rows of $X^T$ one at a time.
+% At iteration $i$, let $x_i^T = [a_1,\ldots,a_m]$ be the new data row extracted from $X^T$ and $y_i$ its corresponding right-hand-side entry. We maintain the current upper triangular factor $R_{i-1} \in \mathbb{R}^{m \times m}$ and the transformed right-hand side $c_{i-1} \in \mathbb{R}^{m}$.
 
-\noindent Appending the new row gives
+% \noindent Appending the new row gives
 
-\begin{equation}
-    \begin{bmatrix}
-        R_{i-1} \\
-        x_i^T
-    \end{bmatrix}
-    =
-    \begin{bmatrix}
-        R_{11} & R_{12} & R_{13} & \cdots & R_{1m} \\
-        0      & R_{22} & R_{23} & \cdots & R_{2m} \\
-        0      & 0      & R_{33} & \cdots & R_{3m} \\
-        \vdots & \vdots & \ddots & \ddots & \vdots \\
-        0      & 0      & \cdots & 0      & R_{mm} \\
-        a_1    & a_2    & a_3    & \cdots & a_m
-    \end{bmatrix}
-    \in \R^{(m+1)\times m}.
-\end{equation}
+% \begin{equation}
+%     \begin{bmatrix}
+%         R_{i-1} \\
+%         x_i^T
+%     \end{bmatrix}
+%     =
+%     \begin{bmatrix}
+%         R_{11} & R_{12} & R_{13} & \cdots & R_{1m} \\
+%         0      & R_{22} & R_{23} & \cdots & R_{2m} \\
+%         0      & 0      & R_{33} & \cdots & R_{3m} \\
+%         \vdots & \vdots & \ddots & \ddots & \vdots \\
+%         0      & 0      & \cdots & 0      & R_{mm} \\
+%         a_1    & a_2    & a_3    & \cdots & a_m
+%     \end{bmatrix}
+%     \in \R^{(m+1)\times m}.
+% \end{equation}
 
-\noindent A sequence of $m$ Householder reflectors is then applied to eliminate the entries of the inserted row one at a time, yielding
+% \noindent A sequence of $m$ Householder reflectors is then applied to eliminate the entries of the inserted row one at a time, yielding
 
-\begin{equation}
-    \begin{bmatrix}
-        R_{i-1} \\
-        x_i^T
-    \end{bmatrix}
-    \longrightarrow
-    \begin{bmatrix}
-        R_i \\
-        0
-    \end{bmatrix}
-    =
-    \begin{bmatrix}
-        R^{(i)}_{11} & R^{(i)}_{12} & R^{(i)}_{13} & \cdots & R^{(i)}_{1m} \\
-        0            & R^{(i)}_{22} & R^{(i)}_{23} & \cdots & R^{(i)}_{2m} \\
-        0            & 0            & R^{(i)}_{33} & \cdots & R^{(i)}_{3m} \\
-        \vdots       & \vdots       & \ddots       & \ddots & \vdots \\
-        0            & 0            & \cdots       & 0      & R^{(i)}_{mm} \\
-        0            & 0            & \cdots       & 0      & 0
-    \end{bmatrix}.
-\end{equation}
+% \begin{equation}
+%     \begin{bmatrix}
+%         R_{i-1} \\
+%         x_i^T
+%     \end{bmatrix}
+%     \longrightarrow
+%     \begin{bmatrix}
+%         R_i \\
+%         0
+%     \end{bmatrix}
+%     =
+%     \begin{bmatrix}
+%         R^{(i)}_{11} & R^{(i)}_{12} & R^{(i)}_{13} & \cdots & R^{(i)}_{1m} \\
+%         0            & R^{(i)}_{22} & R^{(i)}_{23} & \cdots & R^{(i)}_{2m} \\
+%         0            & 0            & R^{(i)}_{33} & \cdots & R^{(i)}_{3m} \\
+%         \vdots       & \vdots       & \ddots       & \ddots & \vdots \\
+%         0            & 0            & \cdots       & 0      & R^{(i)}_{mm} \\
+%         0            & 0            & \cdots       & 0      & 0
+%     \end{bmatrix}.
+% \end{equation}
 
-\noindent The same orthogonal transformations must be applied to the corresponding right-hand side:
+% \noindent The same orthogonal transformations must be applied to the corresponding right-hand side:
 
-\begin{equation}
-    \begin{bmatrix}
-        c_{i-1} \\
-        y_i
-    \end{bmatrix}
-    =
-    \begin{bmatrix}
-        c_1 \\
-        c_2 \\
-        \vdots \\
-        c_m \\
-        y_i
-    \end{bmatrix}
-    \longrightarrow
-    \begin{bmatrix}
-        c^{(i)}_1 \\
-        c^{(i)}_2 \\
-        \vdots \\
-        c^{(i)}_m \\
-        \eta_i
-    \end{bmatrix}
-    =
-    \begin{bmatrix}
-        c_i \\
-        \eta_i
-    \end{bmatrix}.
-\end{equation}
+% \begin{equation}
+%     \begin{bmatrix}
+%         c_{i-1} \\
+%         y_i
+%     \end{bmatrix}
+%     =
+%     \begin{bmatrix}
+%         c_1 \\
+%         c_2 \\
+%         \vdots \\
+%         c_m \\
+%         y_i
+%     \end{bmatrix}
+%     \longrightarrow
+%     \begin{bmatrix}
+%         c^{(i)}_1 \\
+%         c^{(i)}_2 \\
+%         \vdots \\
+%         c^{(i)}_m \\
+%         \eta_i
+%     \end{bmatrix}
+%     =
+%     \begin{bmatrix}
+%         c_i \\
+%         \eta_i
+%     \end{bmatrix}.
+% \end{equation}
 
-\noindent Unlike the inserted row of the matrix, the last component $\eta_i$ of the transformed right-hand side is not generally zero. Since it corresponds to a zero row in the transformed matrix, it is independent of $w$ and therefore does not affect the least-squares minimizer. Consequently, only the updated vector $c_i$ needs to be retained for the subsequent row insertions and for the final triangular solve $R_n w = c_n$. The scalar $\eta_i$ may be discarded unless the final residual norm is also required.
+% \noindent Unlike the inserted row of the matrix, the last component $\eta_i$ of the transformed right-hand side is not generally zero. Since it corresponds to a zero row in the transformed matrix, it is independent of $w$ and therefore does not affect the least-squares minimizer. Consequently, only the updated vector $c_i$ needs to be retained for the subsequent row insertions and for the final triangular solve $R_n w = c_n$. The scalar $\eta_i$ may be discarded unless the final residual norm is also required.
 
-\noindent At step $k$, the current matrix $R$ is already upper triangular and the
-previous components $a_1,\ldots,a_{k-1}$ of the inserted row have already
-been annihilated. Therefore, in column $k$, the only nonzero entry below the
-diagonal is the active element $a_k$.
+% \noindent At step $k$, the current matrix $R$ is already upper triangular and the
+% previous components $a_1,\ldots,a_{k-1}$ of the inserted row have already
+% been annihilated. Therefore, in column $k$, the only nonzero entry below the
+% diagonal is the active element $a_k$.
 
-\noindent For this reason, it is not necessary to build a Householder reflector on the
-entire column. It is sufficient to consider only the two entries involved in
-the elimination,
+% \noindent For this reason, it is not necessary to build a Householder reflector on the
+% entire column. It is sufficient to consider only the two entries involved in
+% the elimination,
 
-\begin{equation}
-    z =
-    \begin{bmatrix}
-        R_{kk} \\
-        a_k
-    \end{bmatrix}
-    \in \R^2.
-\end{equation}
+% \begin{equation}
+%     z =
+%     \begin{bmatrix}
+%         R_{kk} \\
+%         a_k
+%     \end{bmatrix}
+%     \in \R^2.
+% \end{equation}
 
-\noindent A two-dimensional normalized Householder reflector is then constructed as
+% \noindent A two-dimensional normalized Householder reflector is then constructed as
 
-\begin{equation}
-    H_k^{(i)} = I_2 - 2u u^T,
-    \qquad \norm{u}_2=1,
-\end{equation}
+% \begin{equation}
+%     H_k^{(i)} = I_2 - 2u u^T,
+%     \qquad \norm{u}_2=1,
+% \end{equation}
 
-\noindent and chosen so that
+% \noindent and chosen so that
 
-\begin{equation}
-    H_k^{(i)}
-    \begin{bmatrix}
-        R_{kk} \\
-        a_k
-    \end{bmatrix}
-    =
-    \begin{bmatrix}
-        \rho \\
-        0
-    \end{bmatrix}.
-\end{equation}
+% \begin{equation}
+%     H_k^{(i)}
+%     \begin{bmatrix}
+%         R_{kk} \\
+%         a_k
+%     \end{bmatrix}
+%     =
+%     \begin{bmatrix}
+%         \rho \\
+%         0
+%     \end{bmatrix}.
+% \end{equation}
 
-\noindent Thus, at each step only the pair $(R_{kk},a_k)$ is needed to determine the
-reflector: the diagonal entry is updated to $\rho$, while the corresponding
-entry of the inserted row is annihilated.
+% \noindent Thus, at each step only the pair $(R_{kk},a_k)$ is needed to determine the
+% reflector: the diagonal entry is updated to $\rho$, while the corresponding
+% entry of the inserted row is annihilated.
 
-\noindent The same $2\times2$ reflector must then be applied to the remaining entries
-of the two affected rows, so that the transformation is consistent across
-the whole trailing part of the matrix:
+% \noindent The same $2\times2$ reflector must then be applied to the remaining entries
+% of the two affected rows, so that the transformation is consistent across
+% the whole trailing part of the matrix:
 
-\begin{equation}
-    \begin{bmatrix}
-        R_{k,k:m} \\
-        a_{k:m}
-    \end{bmatrix}
-    \leftarrow
-    H_k^{(i)}
-    \begin{bmatrix}
-        R_{k,k:m} \\
-        a_{k:m}
-    \end{bmatrix}.
-\end{equation}
+% \begin{equation}
+%     \begin{bmatrix}
+%         R_{k,k:m} \\
+%         a_{k:m}
+%     \end{bmatrix}
+%     \leftarrow
+%     H_k^{(i)}
+%     \begin{bmatrix}
+%         R_{k,k:m} \\
+%         a_{k:m}https://tex.dm.unipi.it/project/69dfbf9895f53c2f886981b3#
+%     \end{bmatrix}.
+% \end{equation}
 
-\noindent The corresponding right-hand-side entries are transformed by the same reflector,
+% \noindent The corresponding right-hand-side entries are transformed by the same reflector,
 
-\begin{equation}
-    \begin{bmatrix}
-        c_k \\
-        \eta
-    \end{bmatrix}
-    \leftarrow
-    H_k^{(i)}
-    \begin{bmatrix}
-        c_k \\
-        \eta
-    \end{bmatrix},
-\end{equation}
+% \begin{equation}
+%     \begin{bmatrix}
+%         c_k \\
+%         \eta
+%     \end{bmatrix}
+%     \leftarrow
+%     H_k^{(i)}
+%     \begin{bmatrix}
+%         c_k \\
+%         \eta
+%     \end{bmatrix},
+% \end{equation}
 
-\noindent Here $\eta$ is initialized as $\eta=y_i$ at the beginning of the insertion of row $x_i^T$.
+% \noindent Here $\eta$ is initialized as $\eta=y_i$ at the beginning of the insertion of row $x_i^T$.
 
-\noindent After repeating this procedure for $k=1,\ldots,m$, all entries of the inserted row have been annihilated. The row can then be discarded, while the updated $R$ and $c$ contain the effect of the newly inserted data row.
+% \noindent After repeating this procedure for $k=1,\ldots,m$, all entries of the inserted row have been annihilated. The row can then be discarded, while the updated $R$ and $c$ contain the effect of the newly inserted data row.
 
-\begin{algorithm}[H]
-\caption{Two-Dimensional Householder Row Insertion}
-\label{alg:row_insertion_householder}
-\begin{algorithmic}[1]
-    \Require $X\in\R^{m\times n}$, $y\in\R^n$, $\lambda>0$
-    \State $R \gets \lambda I_m$; \quad $c \gets 0\in\R^m$
-    \For{$i=1,\ldots,n$}
-        \State $a \gets X_{:,i}$; \quad $\eta \gets y_i$
-        \For{$k=1,\ldots,m$}
-            \State $z \gets [R_{kk},\, a_k]^{T}$
-            \State $(u,\rho)\gets\Call{StableHouseholderVector}{z}$
-            \State $H\gets I_2-2uu^T$
-            \State $[R_{k,k:m};\,a_{k:m}] \gets H [R_{k,k:m};\,a_{k:m}]$
-            \State $[c_k;\,\eta] \gets H[c_k;\,\eta]$
-            \State Store the reflector record $(k,m+i,u)$
-        \EndFor
-    \EndFor
-    \State Solve $Rw=c$ by back-substitution
-    \State \Return $w$
-\end{algorithmic}
-\end{algorithm}
-
-
-\subsection{Runtime Scalability}
-\label{sec:qr_scalability}
-
-\noindent The column-oriented structure-based method applies one reflector to an
-$(n+1)\times(m-k+1)$ block at each step. Its factorization cost is therefore $\sum_{k=1}^{m}O\bigl((n+1)(m-k+1)\bigr)=O(nm^2+m^2)$.
-
-\noindent Applying the reflectors to the right-hand side costs $O(nm)$ and back
-substitution costs $O(m^2)$. The complete structure-based solver thus costs
-
-\begin{equation}
-    O(nm^2 + m^2).
-\end{equation}
-
-\noindent The row-insertion algorithm has the same order:
-for each of the $n$ data rows, it applies $m$ transformations to trailing segments, at a cost: $\sum_{i=1}^{n}\sum_{k=1}^{m}O(m-k+1)=O(nm^2)$.
-
-\noindent Applying the same transformations to the right-hand side requires an additional $O(nm)$ operations. After all rows have been inserted, the resulting upper triangular system $Rw = c$ is solved by back substitution, which costs $O(m^2)$. Therefore, the total
-cost of the row-insertion solver is
-
-\begin{equation}
-    O(nm^2 + m^2).
-\end{equation}
-
-\noindent Combining these bounds with Section~\ref{sec:qr_cost_project} gives
-
-\begin{equation}
-\label{eq:qr_scaling_summary}
-\begin{aligned}
-    T_{\mathrm{dense\ QR}}(m,n) &= O(m^3+nm^2),\\
-    T_{\mathrm{structure\text{-}based\ QR}}(m,n) &= O(m^2+nm^2),\\
-    T_{\mathrm{row\ insertion}}(m,n) &= O(m^2+nm^2),\\
-    T_{\mathrm{normal\ equations}}(m,n) &= O(m^3+nm^2).
-\end{aligned}
-\end{equation}
-
-\noindent Hence, with the project value $n=12$ fixed, both structured algorithms are quadratic in $m$, whereas generic dense QR and a dense normal-equations solve retain a cubic term.
-
-\begin{wrapfigure}{r}{0.48\textwidth}
-    \centering
-    \includegraphics[width=\linewidth]{Chapters/images/qr_runtime_scaling.png}
-    \caption{Mean solver times for increasing $m$, with $n=12$ fixed.}
-    \label{fig:qr_runtime_scaling}
-\end{wrapfigure}
-
-\noindent The structure-based implementation stores the triangular factor, a copy of the dense block, and $m$ reflectors of length $n+1$, for $O(m^2+nm)$ memory. The current row-insertion wrapper also stores all $nm$ two-dimensional reflector records; disabling that optional storage would leave only $O(m)$ workspace in addition to $R$.
-
-\noindent The notebook first constructs a single matrix with $4000$ rows. The original $500$ rows are retained as the leading block; each additional row is sampled as a complete row of $X$ and perturbed by Gaussian noise scaled by the empirical standard deviation of each column. Taking prefixes of this matrix produces nested problems with fixed $n=12$, $m\in\{100,250,500,1000,2000,4000\}$, and $\lambda=0.5$. Data generation is performed once, outside every timed region. Each entry in Table~\ref{tab:qr_runtime_scaling} is the arithmetic mean of ten runs, without a warm-up or randomized execution order.
-
-\begin{table}[H]
-\centering
-\caption{Internal solver times in milliseconds for the augmented-data runtime
-sweep. The normal-equations timer is partial.}
-\label{tab:qr_runtime_scaling}
-\small
-\setlength{\tabcolsep}{5pt}
-\begin{tabular}{rrrrr}
-    \toprule
-    $m$ & \textbf{Normal eq.} & \textbf{Dense QR}
-        & \textbf{Structure-based QR} & \textbf{Row insertion}\\
-    \midrule
-     100 &    0.173 &      5.788 &   4.551 &  15.780\\
-     250 &    2.427 &     65.614 &  27.953 &  86.709\\
-     500 &   10.701 &    317.151 &  34.107 &  81.734\\
-    1000 &   38.681 &   6468.143 &  55.739 & 140.694\\
-    2000 &  408.960 &  41721.982 & 156.814 & 320.627\\
-    4000 & 2042.037 & 267000.178 & 610.571 & 988.469\\
-    \bottomrule
-\end{tabular}
-\end{table}
-
-\noindent The QR timings include the preparation of the required data structures, factorization, transformation of the right-hand side, and back substitution. In the row-insertion method, the right-hand side is updated during factorization. Dataset generation and accuracy diagnostics are excluded from the timed regions.
-
-\noindent Figure~\ref{fig:qr_runtime_scaling} highlights the growing runtime
-gap between dense QR and the two structured methods. Structure-based QR is
-the fastest QR implementation at every sampled size, reaching a speedup of
-about $437$ over dense QR at $m=4000$. On the final doubling from
-$m=2000$ to $m=4000$, the dense, structure-based, and row-insertion times
-increase by factors of approximately $6.40$, $3.89$, and $3.08$, respectively,
-which is consistent with the cubic and quadratic terms in
-Eq.~\eqref{eq:qr_scaling_summary}.
-
-\subsection{Algorithmic Stability and the Condition Number}
-\label{sec:qr_stability}
-
-\noindent Conditioning is a property of the mathematical problem, whereas
-stability is a property of the algorithm used to solve it. For
-$A=[X^T;\lambda I_m]$,
-
-\begin{equation}
-    A^T A=XX^T+\lambda^2I_m.
-\end{equation}
-
-\noindent Since the project has $m>n$, the matrix $XX^T$ has at least $m-n$
-zero eigenvalues. Therefore, giving $\lambda>0$, we have
-
-\begin{equation}
-\label{eq:qr_condition_lambda}
-    \kappa_2(A)
-    = \|A\|\|A^\dagger\|
-    = \frac{\sigma_{max}(A)}{\sigma_{min}(A)}
-    = \frac{\sigma_{max}(XX^T+\lambda^2I_m)}{\sigma_{min}(XX^T+\lambda^2I_m)}
-    =\frac{\sqrt{\sigma_{\max}(X)^{2}+\lambda^2}}{\lambda}.
-\end{equation}
-
-\noindent If $X\neq0$, Eq.~\eqref{eq:qr_condition_lambda} behaves as
-$\sigma_{\max}(X)/\lambda$ when $\lambda\to0^+$ and tends to $1$ as
-$\lambda\to\infty$. Forming the normal equations squares this number, as
-shown in Eq.~\eqref{eq:qr_condition_squaring}; this is precisely the
-conditioning penalty avoided by Householder QR, getting $\kappa_2(A)$ instead of $\kappa_2(A)^2$.
-
-\noindent In the standard floating-point model with machine precision
-$\varepsilon_{\mathrm{m}}$, Householder QR is backward stable: up to
-dimension-dependent constants, the computed factors are the exact QR factors
-of $A+\Delta A$ with
-
-\begin{equation}
-    \frac{\norm{\Delta A}_2}{\norm{A}_2}=O(\varepsilon_{\mathrm{m}}),
-\end{equation}
-
-\noindent and the computed orthogonal factor is orthogonal to working precision. The resulting forward error still depends on the conditioning and geometry of the least-squares problem. Accordingly, the notebook uses $\varepsilon_m \kappa_2(A)$ for Householder QR and $\min\{1,\varepsilon_m \kappa_2(A)^2\}$ for the normal equations as heuristic indicators of the expected forward-error scale. These quantities should not be interpreted as rigorous universal upper bounds. In particular, the forward sensitivity of a least-squares solution depends not only on $\kappa_2(A)$, but also on the geometry of the problem, including the size and orientation of the residual. The curves are therefore intended only to illustrate the expected conditioning trend of the two methods. The notebook additionally plots $\varepsilon_{\mathrm{m}}$ as a reference scale for $\eta_{\mathrm{opt}}$.
-
-\noindent The notebook diagnoses this behavior using an independent thin-SVD
-reference. If $X=U\Sigma V^T$, then the Tikhonov solution is
-
-\begin{equation}
-\label{eq:qr_svd_reference}
-    w_{\mathrm{SVD}}
-    =U\operatorname{diag}\!\left(
-        \frac{\sigma_i}{\sigma_i^2+\lambda^2}
-      \right)V^T y.
-\end{equation}
-
-\noindent For a computed solution $w$, the two reported diagnostics are the
-relative forward error
-
-\begin{equation}
-\label{eq:qr_forward_error}
-    e_{\mathrm{fwd}}
-    =\frac{\norm{w-w_{\mathrm{SVD}}}_2}{\norm{w_{\mathrm{SVD}}}_2}
-\end{equation}
-
-\noindent and, for the augmented residual $r=Aw-b\neq0$, the scaled first-order
-optimality residual
-
-\begin{equation}
-\label{eq:qr_scaled_optimality}
-    \eta_{\mathrm{opt}}
-    =\frac{\norm{A^T r}_2}{\norm{A}_2\norm{r}_2}.
-\end{equation}
-
-\noindent At an exact least-squares solution $A^T r=0$, so a small
-$\eta_{\mathrm{opt}}$ verifies the optimality condition. It does not by itself
-guarantee a small forward error when $A$ is severely ill-conditioned; both
-diagnostics must therefore be considered together.
-
-\begin{figure}[H]
-    \centering
-    \includegraphics[width=\textwidth]{Chapters/images/qr_conditioning_stability.png}
-    \caption{Conditioning and numerical stability: condition number versus
-    $\lambda$ (left), relative forward error (middle), and scaled optimality
-    residual (right).}
-    \label{fig:qr_conditioning_stability}
-\end{figure}
-
-\noindent The experiment in Figure~\ref{fig:qr_conditioning_stability} sweeps $\lambda\in\{10^j:j=-12,\ldots,4\}$.
-The left panel shows the increase in the condition number as $\lambda$ decreases.
-The middle panel shows that normal equations lose accuracy much earlier than
-the three Householder methods. Both structured variants gradually lose
-accuracy as conditioning worsens, but their relative forward errors remain
-below $10^{-3}$ even at $\lambda=10^{-12}$. Dense QR has the smallest forward
-error in this ill-conditioned regime. Its near-machine-precision forward error at very small
-$\lambda$ is an empirical property of this problem and must not be interpreted
-as a universal conditioning-independent guarantee.
-
-\noindent The right panel complements the forward-error comparison: at
-$\lambda=10^{-12}$, structure-based QR has the smallest scaled optimality
-residual, approximately $6.64\times10^{-5}$, whereas dense QR has the smallest
-forward error. This difference illustrates why the two diagnostics must be
-read together when comparing the methods.
+% \begin{algorithm}[H]
+% \caption{Two-Dimensional Householder Row Insertion}
+% \label{alg:row_insertion_householder}
+% \begin{algorithmic}[1]
+%     \Require $X\in\R^{m\times n}$, $y\in\R^n$, $\lambda>0$
+%     \State $R \gets \lambda I_m$; \quad $c \gets 0\in\R^m$
+%     \For{$i=1,\ldots,n$}
+%         \State $a \gets X_{:,i}$; \quad $\eta \gets y_i$
+%         \For{$k=1,\ldots,m$}
+%             \State $z \gets [R_{kk},\, a_k]^{T}$
+%             \State $(u,\rho)\gets\Call{StableHouseholderVector}{z}$
+%             \State $H\gets I_2-2uu^T$
+%             \State $[R_{k,k:m};\,a_{k:m}] \gets H [R_{k,k:m};\,a_{k:m}]$
+%             \State $[c_k;\,\eta] \gets H[c_k;\,\eta]$
+%             \State Store the reflector record $(k,m+i,u)$
+%         \EndFor
+%     \EndFor
+%     \State Solve $Rw=c$ by back-substitution
+%     \State \Return $w$
+% \end{algorithmic}
+% \end{algorithm}

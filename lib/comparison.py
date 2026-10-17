@@ -238,8 +238,8 @@ def solution_metrics(w, X_data, y_data, lam, baseline):
 # =============================================================================
 
 
-def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repeats=REPEATS, methods=METHODS):
-    """Compare selected solvers using repeated complete-call wall times.
+def benchmark_solvers(X_data, y_data, lam, baseline=None, lbfgs_options=None, repeats=REPEATS, methods=(*METHODS, 'SVD baseline')):
+    """Compare L-BFGS, structured QR and thin SVD under one timing protocol.
 
     Parameters
     ----------
@@ -257,8 +257,9 @@ def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repea
     repeats : int, default=REPEATS
         Positive number of measured calls per method, excluding warm-up.
         The shared default is 10; at least three repetitions are recommended.
-    methods : sequence of str, default=METHODS
-        Nonempty selection of ``'L-BFGS'`` and ``'Structure-based QR'``.
+    methods : sequence of str, default=(*METHODS, 'SVD baseline')
+        Nonempty selection of ``'L-BFGS'``, ``'Structure-based QR'`` and
+        ``'SVD baseline'``. Each selected method is timed in every repetition.
 
     Returns
     -------
@@ -269,13 +270,13 @@ def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repea
         ``q75_ms`` are its interquartile limits, all in milliseconds.
         L-BFGS rows also contain iterations, restarts, requested_tol,
         and stop_ratio = ||g_final|| / max(||g_initial||, TINY).
-        These iterative fields are NaN for QR. Status is ``'converged'``,
+        These iterative fields are NaN for QR and SVD. Status is ``'converged'``,
         ``'max_iter'``, or ``'stopped_before_tol'`` for finite L-BFGS results,
-        ``'direct'`` for finite QR results, and ``'nonfinite'`` if the
+        ``'direct'`` for finite QR/SVD results, and ``'nonfinite'`` if the
         returned vector or any accuracy metric is nonfinite.
     solutions : dict
         Method names mapped to dictionaries containing the last solution
-        ``w``, the last L-BFGS ``history`` (None for QR), and the measured
+        ``w``, the last L-BFGS ``history`` (None for QR and SVD), and the measured
         ``times_seconds`` array of length repeats. QR factors are discarded.
 
     Raises
@@ -292,6 +293,9 @@ def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repea
     metrics, and result disposal are excluded. The IQR describes timing
     dispersion, not a confidence interval. Status is inferred from the
     returned gradient and iteration count, not supplied by the optimizer.
+    The timed SVD solver computes fresh thin factors and the solution only;
+    it does not reuse the reference factors or compute diagnostic scales.
+    Its error against the SVD reference is not an independent accuracy test.
     Input compatibility, valid method names, and repeats > 0 are assumed.
     """
     options = LBFGS_OPTIONS.copy()
@@ -302,9 +306,16 @@ def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repea
     if baseline is None:
         baseline = svd_solver_baseline(X_data, y_data, lam)
 
+    def solve_svd():
+        """Compute a fresh thin SVD and solution without reference diagnostics."""
+        U, singular_values, Vt = np.linalg.svd(X_data, full_matrices=False)
+        weights = singular_values / (singular_values**2 + lam**2)
+        return U @ (weights * (Vt @ y_data))
+
     solvers = {
         'L-BFGS': lambda: lbfgs_optimize(X_data, y_data, lam, **options),
         'Structure-based QR': lambda: qr_solver_structure_based(X_data, y_data, lam),
+        'SVD baseline': solve_svd,
     }
     timings = {method: [] for method in methods}
     solutions = {}
@@ -324,8 +335,10 @@ def benchmark_pair(X_data, y_data, lam, baseline=None, lbfgs_options=None, repea
                 # Retain only the final vector/history; release QR factors untimed
                 if method == 'L-BFGS':
                     solutions[method] = {'w': result[0], 'history': result[1]}
-                else:
+                elif method == 'Structure-based QR':
                     solutions[method] = {'w': result[1], 'history': None}
+                else:
+                    solutions[method] = {'w': result, 'history': None}
                 del result
 
         rows = []

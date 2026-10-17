@@ -9,7 +9,7 @@ convergence.
 
 
 % ─────────────────────────────────────────────────────────────
-\subsection{Gradient and Hessian}
+\section{Gradient and Hessian}
 % ─────────────────────────────────────────────────────────────
 
 \noindent The objective~\eqref{eq:expanded} is a quadratic function of $w$.
@@ -26,7 +26,7 @@ parameter $\lambda$. Its gradient and Hessian are:
 
 
 % ─────────────────────────────────────────────────────────────
-\subsection{Strong Convexity and Smoothness}
+\section{Strong Convexity and Smoothness}
 % ─────────────────────────────────────────────────────────────
 
 \noindent To guarantee the existence of a unique global minimum and to analyze the
@@ -66,19 +66,23 @@ to:
 \end{equation}
 This highlights the crucial role of $\lambda$: without regularization, $H$ would
 be only positive \emph{semi}-definite, $\mu = 0$, and $f$ would lack strong
-convexity. In that case, the system $Hw = Xy$ would be underdetermined, the
-minimum would not be unique, and iterative methods would not converge to a
-well-defined solution.
+convexity. In that case, the system $Hw = Xy$ would be singular with infinitely many
+solutions, the minimum would not be unique, and the limit reached by an
+iterative method would depend on its starting point.
 
 \noindent Together, $L$ and $\mu$ quantify the curvature of the objective: $\mu$
 controls the minimum curvature (how sharply $f$ rises in the flattest direction)
 and $L$ the maximum curvature (how sharply it rises in the steepest direction).
-Their ratio defines the condition number of the problem, which directly impacts
-the convergence speed of iterative solvers such as L-BFGS.
+Their ratio $L/\mu$ is the condition number of the Hessian,
+$\kappa(H) = \kappa(\hat X)^2$, and its square root is the condition number
+$\kappa(\hat X)$ of the augmented matrix derived in
+Section~\ref{sec:conditioning}. It governs the worst-case convergence speed of
+iterative solvers; for L-BFGS on our quadratic a stronger result holds
+(Section~\ref{sec:finite_termination}).
 
 
 % ─────────────────────────────────────────────────────────────
-\subsection{Condition Number}
+\section{Condition Number}
 \label{sec:conditioning}
 % ─────────────────────────────────────────────────────────────
 
@@ -108,9 +112,24 @@ equations~\eqref{eq:muL}, the condition number of $\hat{X}$ is:
     = \frac{\sqrt{\lambda_{\max}(XX^T) + \lambda^2}}{\lambda}.
 \end{equation}
 
+\noindent The last step uses $\mu = \lambda^2$, which holds because $XX^T$ has
+$m - n$ zero eigenvalues when $m > n$ (Lemma~\ref{lemma:singvals}). The
+smallest singular value of $\hat{X}$ is therefore $\lambda$ itself, and
+\emph{not} the smallest non-zero singular value of $X$: the regularization
+block $\lambda I_m$ is what bounds the spectrum of $\hat X$ from below.
+
 \noindent As the equation shows, the condition number depends heavily on the
 regularization parameter. For small values of $\lambda$, it scales as
 $\mathcal{O}(1/\lambda)$: weak regularization produces a highly elongated,
-canyon-like objective landscape, causing iterative methods to take many small
-zigzagging steps. Conversely, a large $\lambda$ drives $\kappa(\hat{X}) \to 1$,
+canyon-like objective landscape, on which first-order methods such as
+steepest descent take many small zigzagging steps. Conversely, a large $\lambda$ drives $\kappa(\hat{X}) \to 1$,
 making the problem nearly spherical and easy to solve from any direction.
+
+\noindent The quantity $\kappa(\hat X)$ measures the conditioning of the
+problem on the whole of $\mathbb{R}^m$. An iterative method started at
+$w_0 = 0$ never leaves the range of $X$ (Section~\ref{sec:finite_termination}),
+where the Hessian has the $n$ eigenvalues $\sigma_i^2 + \lambda^2$ and the
+relevant ratio is $(\sigma_{\max}^2 + \lambda^2)/(\sigma_{\min}^2 + \lambda^2)$,
+which stays bounded as $\lambda \to 0$. This is why the accuracy of L-BFGS does
+not follow $\kappa(\hat X)$ (Section~\ref{sec:exp_lambda}), whereas that of a direct solver does: as $\kappa(\hat X)$ for QR and as
+$\kappa(\hat X)^2$ for the normal equations (Section~\ref{sec:qr_stability}).

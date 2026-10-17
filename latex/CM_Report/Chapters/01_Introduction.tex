@@ -39,10 +39,12 @@ improving the numerical stability of the solution and controlling overfitting.
     \item \textbf{(A1)} A limited-memory quasi-Newton method (L-BFGS), which iteratively 
     approximates the curvature of the objective function using only gradient information 
     and a small number of stored vector pairs.
-    \item \textbf{(A2)} A direct method based on thin QR factorization with Householder 
-    reflectors, in the compact variant where the orthogonal matrix~$Q$ is not formed 
-    explicitly, but applied implicitly through stored Householder vectors.
+    \item \textbf{(A2)} A direct method based on thin QR factorization with Householder
+    reflectors, in the compact variant where the orthogonal matrix~$Q$ is not formed
+    explicitly: the stored Householder vectors are used to compute products with
+    $Q$ and $Q^T$ implicitly.
 \end{itemize}
 
-\noindent Both algorithms are implemented from scratch, without relying on any off-the-shelf 
-numerical solvers.
+\noindent Both algorithms are implemented from scratch, without relying on any
+off-the-shelf numerical solvers; library routines are used only to compute
+reference solutions for the experiments.
