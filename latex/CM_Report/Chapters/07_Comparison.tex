@@ -3,80 +3,90 @@
 \label{sec:comparison}
 % ═════════════════════════════════════════════════════════════
 
-\noindent This chapter compares L-BFGS and structure-based Householder QR
-under a common experimental protocol. Both solve the same regularized
-least-squares problem, but their computational costs and sensitivity to the
-spectrum differ. We therefore compare complete solve times together with
-coefficient errors, optimality residuals, and termination status. All results
-and both figures below come from the executed notebook
-\texttt{04\_comparison.ipynb}.
+\noindent The preceding chapters studied L-BFGS and structure-based
+Householder QR separately. We now compare them on the same problems and
+under a common timing protocol, considering both computational cost and
+achieved numerical accuracy. The experiments cover the initial ML-CUP25
+instance, dimensional scaling, regularization, a prescribed difficult
+spectrum, and reuse of a QR factorization for several right-hand sides.
+A thin-SVD solver also provides an external runtime baseline.
+All numerical values and figures in this chapter come from the saved
+outputs of \texttt{04\_comparison.ipynb}; figure filenames identify their
+source notebook sections.
 
 \section{Experimental Protocol and Accuracy Measures}
 \label{sec:comparison_protocol}
 
-\noindent The initial problem is the standardized ML-CUP25 matrix with
-$m=500$, $n=12$, and $\lambda=0.5$, using the same synthetic response vector
-as the preceding experiments (seed 42). Consequently, accuracy here concerns
-the numerical solution of the optimization problem, rather than prediction
-on unseen data. L-BFGS uses the configuration selected in
-Chapter~\ref{sec:experiments}: memory $\bar m=12$, BB1 scaling, exact line
-search, no curvature-based restart, and $w_0=0$. Unless explicitly varied,
-the relative gradient tolerance is $\varepsilon=10^{-14}$ and the iteration
-budget is 2000. The curvature-pair acceptance safeguard remains active.
+\noindent The initial problem uses the standardized ML-CUP25 matrix with
+$m=500$, $n=12$, $\lambda=0.5$, and the same synthetic response vector as
+Chapter~\ref{sec:experiments} (seed 42). Accuracy therefore concerns the
+numerical solution of the regularized least-squares problem, rather than
+prediction on unseen data. Unless stated otherwise, L-BFGS starts from
+$w_0=0$, uses memory $\bar m=12$, BB1 scaling, exact line search, no
+curvature-based restart, relative gradient tolerance $10^{-14}$, and a
+budget of 2000 iterations. The curvature-pair acceptance safeguard remains
+active. The two exceptions to the memory setting are stated explicitly:
+$\bar m=\max(12,n)$ in the $n$ sweep and $\bar m=24$ in the spectral stress
+test.
 
-\noindent Each complete solver call is timed externally after one discarded
-warm-up, with ten repetitions and a reproducibly shuffled method order.
-The reported statistic is the median; the interval between the first and
-third quartiles describes timing dispersion, not a confidence interval.
-Initialization, factorization, and back substitution are included where
-applicable. Data construction, SVD references, and accuracy diagnostics are
-excluded. The run uses double precision, Python 3.13.9, NumPy 2.1.3, and one
-BLAS thread on an ARM64 machine. These timings describe the present
-implementations and should not be directly substituted for the internal
-timings in the individual algorithm chapters.
+\noindent For each timed configuration, \texttt{benchmark\_solvers} performs
+one discarded warm-up per method and ten measured repetitions, shuffling
+method order with a fixed seed. An external timer surrounds each complete
+solver call, including initialization, factorization and back substitution
+where applicable. Normal solver histories and reflector storage are also
+included. Data construction, the numerical reference, and common accuracy
+diagnostics are outside the timed regions. We report medians and
+interquartile ranges (IQRs); the latter describe timing dispersion, not
+confidence intervals. The saved run uses double precision, Python 3.13.9,
+NumPy 2.1.3, and one OpenBLAS thread on an ARM64 machine. These timings
+should not be directly substituted for the internal solver timings in
+Chapters~\ref{sec:experiments} and~\ref{sec:qr_exp}.
 
-\noindent The independent thin-SVD solution of
-Eq.~\eqref{eq:qr_svd_reference} supplies a common numerical reference
-$w_{\mathrm{SVD}}$. We use the forward error of
-Eq.~\eqref{eq:qr_forward_error} and the relative gradient
+\noindent The thin-SVD solution of Eq.~\eqref{eq:qr_svd_reference} supplies
+the common reference $w_{\mathrm{SVD}}$. The main accuracy measures are
 \begin{equation}
 \label{eq:comparison_gradient}
     e_w=\frac{\norm{w-w_{\mathrm{SVD}}}_2}{\norm{w_{\mathrm{SVD}}}_2},
     \qquad
-    g_{\mathrm{rel}}=\frac{\norm{X(X^Tw-y)+\lambda^2w}_2}{\norm{Xy}_2}.
+    g_{\mathrm{rel}}=
+    \frac{\norm{X(X^Tw-y)+\lambda^2w}_2}{\norm{Xy}_2}.
 \end{equation}
-Since $w_0=0$, the latter agrees with the stopping normalization in
-Eq.~\eqref{eq:stop_rel}. It differs from $\eta_{\mathrm{opt}}$ in
-Eq.~\eqref{eq:qr_scaled_optimality}, whose denominator contains the augmented
-residual. A QR result is labelled as a direct solve; it is assessed with the
-same metrics, without assigning it an iterative stopping tolerance.
+The forward error agrees with Eq.~\eqref{eq:qr_forward_error}, while the
+relative gradient uses the stopping normalization of
+Eq.~\eqref{eq:stop_rel}, since $\nabla f(0)=-Xy$. Its denominator differs
+from that of $\eta_{\mathrm{opt}}$ in
+Eq.~\eqref{eq:qr_scaled_optimality}; their numerical values are therefore
+not interchangeable. QR and SVD are labelled as direct solves and are
+assessed through the same metrics, without assigning them an iterative
+stopping tolerance.
 
-\noindent The notebook also records fitted-vector discrepancies, data and
-augmented residuals, and a scaled stationarity residual. Agreement in the
-objective alone is insufficient near convergence. In particular, writing
-$e=w-w_{\mathrm{SVD}}$ and $H=XX^T+\lambda^2I_m$ gives
+\noindent The notebook also checks fitted-vector discrepancies, data and
+augmented residuals, and scaled stationarity. Objective agreement alone
+can conceal coefficient errors. In particular, with
+$e=w-w_{\mathrm{SVD}}$ and $H=XX^T+\lambda^2I_m$,
 \begin{equation}
 \label{eq:comparison_energy}
     f(w)-f(w_{\mathrm{SVD}})
     =\nabla f(w_{\mathrm{SVD}})^Te+\tfrac12e^THe.
 \end{equation}
-The nonnegative quantity $e^THe/(2f(w_{\mathrm{SVD}}))$ avoids subtracting
-nearly equal objectives, but equals the relative objective gap only when
-the reference is an exact minimizer. The SVD reference itself has
+The nonnegative quantity $e^THe/(2f(w_{\mathrm{SVD}}))$ can be evaluated
+without subtracting nearly equal objectives, but equals the relative
+objective gap only at an exact reference minimizer. The SVD reference is
+itself computed in floating point and has
 $g_{\mathrm{rel}}\approx2.0\times10^{-15}$ on the initial instance.
 
 \section{Accuracy and Runtime on ML-CUP25}
 \label{sec:comparison_baseline}
 
 \noindent Table~\ref{tab:comparison_baseline} shows that both algorithms
-reach coefficient errors of order $10^{-15}$. L-BFGS satisfies the requested
-tolerance in 12 iterations and is approximately $21.7$ times faster in this
-run. Differences between forward errors at this scale do not establish a
-meaningful accuracy advantage over a floating-point SVD reference.
+reach coefficient errors of order $10^{-15}$. L-BFGS meets its requested
+tolerance in 12 iterations and is about $21.5$ times faster in this run.
+The small difference between the two forward errors does not establish a
+meaningful accuracy ranking at the precision of the numerical reference.
 
 \begin{table}[H]
 \centering
-\caption{Complete solve times and achieved accuracy on ML-CUP25
+\caption{Complete solve times and accuracy on ML-CUP25
 ($m=500$, $n=12$, $\lambda=0.5$). Times and quartiles are in milliseconds.}
 \label{tab:comparison_baseline}
 \small
@@ -85,193 +95,370 @@ meaningful accuracy advantage over a floating-point SVD reference.
     \textbf{Method} & \textbf{Median} & $[Q_{0.25},Q_{0.75}]$
         & $e_w$ & $g_{\mathrm{rel}}$ \\
     \midrule
-    L-BFGS & 0.512 & $[0.499,0.522]$ & $2.03\times10^{-15}$ & $4.26\times10^{-17}$ \\
-    Structure-based QR & 11.114 & $[11.035,11.340]$ & $2.64\times10^{-15}$ & $6.49\times10^{-16}$ \\
+    L-BFGS & 0.531 & $[0.515,0.548]$ & $2.03\times10^{-15}$ & $4.26\times10^{-17}$ \\
+    Structure-based QR & 11.42 & $[11.33,11.63]$ & $2.64\times10^{-15}$ & $6.49\times10^{-16}$ \\
     \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent Both solutions give $f(w)\approx0.092632$, a relative data
-residual of $0.029902$, and a relative augmented residual of $0.161038$.
-These nonzero residuals are compatible with optimality of the regularized
-problem. In particular, minimizing the data residual alone would ignore the
-penalty on $w$.
+\noindent Both solutions give $f(w)\approx0.09263$, a relative data
+residual of $0.02990$, and a relative augmented residual of $0.1610$.
+The nonzero residuals are consistent with optimality: the objective also
+penalizes the norm of $w$, so the smallest possible data residual alone
+would not identify the regularized solution.
 
 \subsection{Time at a Common Accuracy Requirement}
 \label{sec:comparison_quality}
 
-\noindent Figure~\ref{fig:comparison_time_accuracy} varies only the L-BFGS
-tolerance, from $10^{-2}$ to $10^{-14}$. The three tightest tolerances all
-produce the same 12-iteration solution; their small timing differences are
-measurement variability. QR contributes one complete direct solve, rather
-than an iterative convergence trajectory.
+\noindent Figure~\ref{fig:comparison_time_accuracy} compares complete
+L-BFGS runs at tolerances from $10^{-2}$ to $10^{-14}$ with the direct QR
+result. Tightening the tolerance first improves both coefficient accuracy
+and optimality, at the expense of additional iterations. The three
+tightest tolerances all reach the same 12-iteration solution; their points
+nearly coincide and their timing differences reflect measurement
+variability. All sampled L-BFGS runs converge, so no measured point uses
+the failure marker shown in the legend. QR supplies a final solution,
+rather than an iterative trajectory.
+
+\noindent At the common requirements $e_w\leq10^{-6}$ and
+$g_{\mathrm{rel}}\leq10^{-8}$, the fastest sampled qualifying L-BFGS run
+requests $\varepsilon=10^{-8}$. It takes 10 iterations and $0.409$ ms,
+with $e_w=1.41\times10^{-7}$ and $g_{\mathrm{rel}}=8.70\times10^{-9}$.
+QR also meets both targets, taking $11.42$ ms, so the measured time ratio
+is approximately $27.9$. L-BFGS can therefore reduce its cost when full
+working-precision accuracy is unnecessary. This comparison uses common
+acceptance thresholds, rather than identical achieved errors or globally
+optimal parameter tuning.
 
 \begin{figure}[H]
     \centering
-    \includegraphics[width=\textwidth]{Chapters/images/comparison_time_accuracy.png}
-    \caption{Measured time--accuracy trade-off on the initial problem.
-    Labels indicate requested L-BFGS tolerances. All sampled L-BFGS runs
-    satisfy their tolerance; the square denotes the direct QR result.}
+    \includegraphics[width=\textwidth]{Chapters/images/img_04_comparison_section_7_1.png}
+    \caption{Coefficient error and relative gradient versus complete solve
+    time; labels denote requested L-BFGS tolerances (notebook Section 7.1).}
     \label{fig:comparison_time_accuracy}
 \end{figure}
-
-\noindent To compare the cost of reaching a common quality level, impose
-$e_w\leq10^{-6}$ and $g_{\mathrm{rel}}\leq10^{-8}$. Among the sampled
-configurations, the fastest qualifying L-BFGS run requests
-$\varepsilon=10^{-8}$ and takes 10 iterations: its median time is
-$0.388$ ms, with $e_w=1.41\times10^{-7}$ and
-$g_{\mathrm{rel}}=8.69\times10^{-9}$. QR also meets both targets, taking
-$11.114$ ms, so the measured time ratio is approximately $28.7$.
-This is a comparison at common acceptance thresholds, rather than identical
-achieved errors or a claim of globally optimal parameter tuning.
 
 \section{Dimensional Scaling and Storage}
 \label{sec:comparison_scaling}
 
 \subsection{Increasing the Number of Unknowns}
 
-\noindent The $m$ sweep follows the nested row-resampling construction of
-Section~\ref{sec:qr_scalability}: original rows are retained, additional
-rows are sampled with a small perturbation, and prefixes give
-$m\in\{100,250,500,1000,2000,4000\}$ at fixed $n=12$ and $\lambda=0.5$.
-Unlike the prescribed-spectrum study in Section~\ref{sec:exp_scaling_nm},
-conditioning can change with $m$.
+\noindent The first dimension sweep follows the nested row-resampling
+construction of Section~\ref{sec:qr_scalability}. Original rows are retained,
+additional rows are sampled with small Gaussian perturbations, and prefixes
+give $m\in\{100,250,500,1000,2000,4000\}$ at fixed $n=12$ and $\lambda=0.5$.
+Conditioning can change with $m$, unlike the prescribed-spectrum $m$ study
+in Section~\ref{sec:exp_scaling_nm}.
 
-\begin{figure}[H]
-    \centering
-    \includegraphics[width=\textwidth]{Chapters/images/comparison_scaling_m.png}
-    \caption{Complete solve times, coefficient errors, and L-BFGS iteration
-    counts for increasing $m$. Dashed complexity guides are normalized at
-    the smallest size and are not fitted asymptotic laws.}
-    \label{fig:comparison_scaling_m}
-\end{figure}
+\noindent Figure~\ref{fig:comparison_scaling_m} shows a growing timing
+advantage for L-BFGS while both methods retain coefficient errors below
+$10^{-14}$. L-BFGS takes 12 iterations at every sampled size, with time
+increasing from $0.469$ to $1.799$ ms; QR increases from $1.987$ to
+$231.5$ ms. The QR/L-BFGS ratio consequently grows from about $4.2$ at
+$m=100$ to $128.7$ at $m=4000$. The middle and right panels show that this
+advantage is obtained without sacrificing convergence or forward accuracy.
 
-\noindent L-BFGS takes 12 iterations at every sampled size and meets its
-tolerance throughout. Its time rises from $0.431$ ms at $m=100$ to
-$1.745$ ms at $m=4000$, whereas QR rises from $1.801$ to $237.894$ ms.
-The corresponding QR/L-BFGS ratio grows from $4.2$ to $136.3$.
-Both methods retain forward errors below $10^{-14}$ over this sweep.
-
-\noindent The growing runtime separation is consistent with the cost
-models of Sections~\ref{sec:exp_cost} and~\ref{sec:qr_flop_count}:
+\noindent These observations agree with the cost models of
+Sections~\ref{sec:exp_cost} and~\ref{sec:qr_flop_count}:
 \begin{equation}
 \label{eq:comparison_cost}
-    T_{\mathrm{L\text{-}BFGS}}=O\!\left(k(mn+\bar m m)\right),
+    T_{\mathrm{L\text{-}BFGS}}=O\!\left(k(mn+\bar m\,m)\right),
     \qquad
     T_{\mathrm{QR}}=O\!\left((n+1)m^2\right).
 \end{equation}
-The first bound depends on the observed iteration count $k$; linear growth
-in $m$ requires that this count remain bounded. Fixed overheads and the
-finite range of sizes prevent interpreting the measured curves as exact
-power laws.
+Here $k$ is the observed number of iterations. At fixed $n$, $\bar m$,
+and comparable $k$, L-BFGS has linear leading work in $m$, whereas the
+structured QR factorization retains a quadratic term. The dashed guides
+are normalized at the smallest size; finite-size overheads mean that the
+measured curves need not follow them exactly.
 
-\noindent Storage also favors L-BFGS in this regime. Counting only the
-principal double-precision arrays gives $8(2\bar m m)$ bytes for its pair
-capacity and $8(m^2+m(n+1))$ bytes for QR's dense triangular-factor array
-and compact reflectors. At $m=4000$ these are $0.732$ and $122.467$ MiB,
-respectively. Inputs, temporary arrays, Python objects, and convergence
-histories are excluded; these figures are array counts, not measured peak
-process memory.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{Chapters/images/img_04_comparison_section_9_1.png}
+    \caption{Runtime, coefficient error, and L-BFGS iteration count for
+    increasing $m$ at fixed $n=12$ (notebook Section 9.1).}
+    \label{fig:comparison_scaling_m}
+\end{figure}
+
+\subsection{The Thin-SVD Runtime Baseline}
+\label{sec:comparison_svd_runtime}
+
+\noindent A second timing sweep adds the thin-SVD solver to assess the
+cost of both project implementations against a library-based baseline.
+All three methods are remeasured together, with the same external timer
+and randomized order; these are separate measurements from
+Figure~\ref{fig:comparison_scaling_m}. Every QR and SVD call includes a
+fresh factorization. The timed SVD routine computes only its factors and
+the regularized solution of Eq.~\eqref{eq:qr_svd_reference}; reference
+norms, condition numbers, and error diagnostics remain outside the timer.
+
+\noindent Figure~\ref{fig:comparison_svd_runtime} shows that SVD is the
+fastest of the three at every sampled size. At $m=500$, its median is
+$0.0950$ ms, compared with $0.584$ ms for L-BFGS and $11.26$ ms for QR.
+At $m=4000$, the corresponding values are $0.625$, $1.908$, and $237.8$ ms.
+Thus the superiority of L-BFGS over the project QR implementation does not
+make it the fastest available solver for this particular matrix shape.
+For $m>n$, thin SVD costs $O(mn^2+n^3)$ and operates directly on the tall,
+narrow matrix $X$, whereas the structured QR solver still constructs an
+$m\times m$ triangular factor. The compiled SVD implementation also has
+different execution overheads from the project routines. Both the
+algorithmic structure and the implementation contribute to this ranking.
+
+\noindent The SVD forward discrepancy against the SVD reference is zero
+in the saved table, as expected from comparing the same formula and
+factorization routine. This is not an independent accuracy certificate;
+its relative gradient, between approximately $1.3\times10^{-15}$ and
+$3.4\times10^{-15}$, supplies an additional optimality check. The comparison
+therefore gives a useful runtime baseline while preserving the distinction
+between reference construction and measured solver work.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.88\textwidth]{Chapters/images/img_04_comparison_section_9_2.png}
+    \caption{Median complete solve times and IQRs for L-BFGS, structure-based
+    QR, and thin SVD as $m$ increases (notebook Section 9.2).}
+    \label{fig:comparison_svd_runtime}
+\end{figure}
 
 \subsection{Increasing the Number of Spectral Directions}
+\label{sec:comparison_n_scaling}
 
-\noindent A separate synthetic sweep fixes $m=500$, $\lambda=0.5$, and
-$\bar m=12$, while increasing $n$ from 4 to 96. Singular values are
-geometrically spaced between 1 and 10, keeping
-$\kappa_2(A)\approx20.0$ and
-$\kappa_2(H|_{\operatorname{range}(X)})=80.2$ constant. This differs from
-the spectrum and memory study in Section~\ref{sec:exp_scaling_nm}.
+\noindent The $n$ sweep fixes $m=500$ and $\lambda=0.5$, and uses the
+prescribed-spectrum construction of Section~\ref{sec:exp_scaling_nm}.
+The singular values are geometrically spaced from $75.74$ to $75.74/20$,
+so $\kappa_2(A)\approx151.5$ remains constant. We test
+$n\in\{5,12,25,50,100,150,200,250,300\}$ and set
+$\bar m=\max(12,n)$. This experiment increases both the number of spectral
+directions and the available L-BFGS memory; it is not a fixed-memory test.
 
-\noindent The L-BFGS iteration counts are $4,8,12,33,78,113$ for
-$n=4,8,12,24,48,96$, respectively. All runs satisfy the requested tolerance,
-but fixed memory becomes less effective as more spectral directions are
-introduced. At $n=96$, L-BFGS takes $10.255$ ms and QR $27.517$ ms, reducing
-the timing advantage to approximately $2.7$. Their forward errors are
-$1.91\times10^{-14}$ and $3.62\times10^{-15}$, respectively.
-Thus the favorable behavior at $n=12$ should not be extrapolated with a
-constant iteration count to larger $n$.
+\noindent In Figure~\ref{fig:comparison_scaling_n}, L-BFGS is much faster
+at small $n$, but its advantage decreases as both the iteration count and
+the two-loop work grow. The iteration counts are
+$6,12,25,50,93,122,146,167,183$, respectively, and all runs meet the
+requested tolerance. At $n=100$, L-BFGS takes $18.65$ ms against $27.53$ ms
+for QR. At $n=200$ the medians are nearly equal ($45.58$ and $44.98$ ms);
+by $n=300$, QR has the lower median, $62.36$ ms against $72.63$ ms.
+These values locate a crossover within the tested range rather than a
+universal threshold, particularly given the variability near the crossing.
 
-\section{Conditioning and a Difficult Synthetic Spectrum}
+\noindent The accuracy panel also changes with dimension. At $n=300$,
+L-BFGS and QR give $e_w=5.42\times10^{-14}$ and
+$2.26\times10^{-14}$, respectively. Both remain accurate, while QR has
+smaller forward errors over the larger-$n$ cases. Since memory increases
+with $n$, the loss of L-BFGS's timing advantage cannot be attributed to a
+fixed history that is too short. More iterations and more stored pairs
+both contribute. The near-$n$ behavior at smaller dimensions is consistent
+with the subspace discussion in Section~\ref{sec:finite_termination}, but
+does not constitute a finite-termination guarantee for this implementation.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{Chapters/images/img_04_comparison_section_10.png}
+    \caption{Runtime, coefficient error, and iteration count versus $n$,
+    with $m=500$ and $\bar m=\max(12,n)$ (notebook Section 10).}
+    \label{fig:comparison_scaling_n}
+\end{figure}
+
+\subsection{Principal Storage Requirements}
+\label{sec:comparison_storage}
+
+\noindent Figure~\ref{fig:comparison_storage} complements the runtime
+comparison with an analytical count of the principal stored arrays. In
+double precision, the capacity of the L-BFGS pair history is
+$8(2\bar m\,m)$ bytes; the dense array for $R$ and the compact QR reflectors
+require $8(m^2+m(n+1))$ bytes. At $m=4000$, $n=12$, and $\bar m=12$, these
+counts are $0.732$ MiB and $122.467$ MiB, respectively, a factor of about
+167. This makes the linear-versus-quadratic storage distinction relevant
+even when both solvers attain essentially the same coefficient accuracy.
+
+\noindent These curves exclude shared inputs, temporary arrays, Python
+objects, and convergence histories. They are not measurements of peak RAM,
+and the L-BFGS curve describes pair capacity rather than necessarily
+occupied storage. The fixed $\bar m=12$ model applies to the $m$ sweep;
+it should not be transferred unchanged to the growing-memory $n$ sweep.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.78\textwidth]{Chapters/images/img_04_comparison_section_13.png}
+    \caption{Principal array storage at fixed $n=12$ and $\bar m=12$, in
+    MiB ($2^{20}$ bytes), as a function of $m$ (notebook Section 13).}
+    \label{fig:comparison_storage}
+\end{figure}
+
+\section{Regularization and Spectral Difficulty}
 \label{sec:comparison_conditioning}
 
-\noindent On ML-CUP25, decreasing $\lambda$ from $0.5$ to $10^{-8}$
-raises the full augmented condition number to approximately
-$7.6\times10^9$. Nevertheless, L-BFGS still converges in 12 iterations
-with $e_w\approx2.1\times10^{-15}$. Structure-based QR instead gives
-$e_w\approx7.7\times10^{-8}$, despite
-$g_{\mathrm{rel}}\approx5.6\times10^{-16}$. This illustrates why a tiny
-optimality residual does not guarantee accurate coefficients.
+\subsection{Regularization on ML-CUP25}
 
-\noindent The subspace structure explains why the full condition number
-alone does not predict L-BFGS behavior here. Starting from zero, in exact
-arithmetic its iterates remain in $\operatorname{range}(X)$, where
+\noindent Figure~\ref{fig:comparison_regularization} varies $\lambda$
+on the same ML-CUP25 data. Each value defines a different minimizer and
+uses its own SVD reference. For small $\lambda$, the runtime panel changes
+little: L-BFGS still takes 12 iterations, whereas QR always performs a
+complete factorization. At stronger regularization the iteration count
+falls to 9 at $\lambda=10$ and 6 at $\lambda=100$, reducing the L-BFGS time
+further.
+
+\noindent The forward-error and gradient panels reveal a different aspect
+of the comparison. At $\lambda=10^{-8}$, QR gives
+$e_w=7.70\times10^{-8}$ despite $g_{\mathrm{rel}}=5.59\times10^{-16}$;
+L-BFGS gives $e_w=2.08\times10^{-15}$ with
+$g_{\mathrm{rel}}=2.22\times10^{-16}$. Thus a tiny optimality residual
+can coexist with a much larger coefficient error. QR avoids explicitly
+forming the normal equations, as explained in Chapter~\ref{sec:qr}, but
+its forward accuracy still depends on the conditioning and geometry of
+the least-squares problem.
+
+\noindent The conditioning panel explains why the full condition number
+alone does not predict L-BFGS behavior from zero. In exact arithmetic the
+iterates remain in $\operatorname{range}(X)$, where, for full-column-rank $X$,
 \begin{equation}
 \label{eq:comparison_restricted_condition}
     \kappa_2\!\left(H|_{\operatorname{range}(X)}\right)
     =\frac{\sigma_{\max}(X)^2+\lambda^2}
-           {\sigma_{\min}(X)^2+\lambda^2}
+           {\sigma_{\min}(X)^2+\lambda^2}.
 \end{equation}
-for full-column-rank $X$. This ratio remains about $10^3$ as
-$\lambda\to0$ for the present data, while the full Hessian has additional
-eigenvalues $\lambda^2$. The observed 12-step convergence is not a general
-finite-termination guarantee for L-BFGS: the changing initial scaling,
-limited memory, curvature safeguards, and rounding distinguish it from the
-exact-arithmetic result discussed in Section~\ref{sec:finite_termination}.
+This ratio remains about $10^3$ at small $\lambda$, while the full Hessian
+has additional eigenvalues $\lambda^2$ and reaches a condition number of
+about $5.7\times10^{19}$ at $\lambda=10^{-8}$. This distinction is consistent
+with the stable L-BFGS forward errors in the plot. The precise iteration
+counts remain empirical, subject to scaling, curvature safeguards, and
+rounding. Nor is L-BFGS uniformly more accurate: at $\lambda=10$, its
+forward error is $5.05\times10^{-14}$ against $6.24\times10^{-15}$ for QR,
+although it meets the requested gradient tolerance.
 
-\noindent To test a less favorable restricted spectrum, we construct one
-matrix with $m=160$, $n=24$, and singular values geometrically spaced from
-$10^{-4}$ to 1. Table~\ref{tab:comparison_stress} reports the results for
-three regularization values, keeping the L-BFGS settings unchanged.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{Chapters/images/img_04_comparison_section_8_1.png}
+    \caption{Runtime, forward error, relative gradient, and full versus
+    restricted Hessian conditioning as $\lambda$ varies (notebook Section 8.1).}
+    \label{fig:comparison_regularization}
+\end{figure}
+
+\subsection{A Difficult Prescribed Spectrum}
+\label{sec:comparison_stress}
+
+\noindent The stress test fixes $m=160$, $n=24$, and geometrically spaced
+singular values from $10^{-4}$ to 1. The same synthetic $X,y$ are solved
+at $\lambda\in\{10^{-4},10^{-2},1\}$ with L-BFGS memory $\bar m=24$.
+At the smallest $\lambda$, even the restricted Hessian condition number
+is approximately $5\times10^7$, so this case tests more than the weak
+null-space regularization of the ML-CUP25 sweep.
+
+\noindent Figure~\ref{fig:comparison_stress} and
+Table~\ref{tab:comparison_stress} show that L-BFGS converges in all three
+cases and remains faster than QR. Its iteration count rises from 9 to 37
+as regularization weakens, narrowing the timing advantage from about
+$10.1$ to $1.7$. The forward-error curves almost overlap: both methods
+reach approximately $2.7\times10^{-13}$ at $\lambda=10^{-4}$ and
+$5.2\times10^{-15}$ at $\lambda=1$. These results use the configured memory of 24. All recorded L-BFGS
+configurations in the notebook satisfy their requested tolerance.
 
 \begin{table}[H]
 \centering
-\caption{Synthetic spectral stress test. Times are medians in milliseconds;
-the asterisk marks exhaustion of the 2000-iteration budget. QR has no
-iterative stopping criterion.}
+\caption{Spectral stress-test results with $\bar m=24$. Times are median
+complete-call measurements in milliseconds.}
 \label{tab:comparison_stress}
 \small
 \begin{tabular}{llrrrr}
     \toprule
     $\lambda$ & \textbf{Method} & \textbf{Time} & $k$ & $e_w$ & $g_{\mathrm{rel}}$ \\
     \midrule
-    $10^{-4}$ & L-BFGS & 111.577 & $2000^*$ & $3.18\times10^{-5}$ & $9.23\times10^{-8}$ \\
-               & Structure-based QR & 3.354 & -- & $3.95\times10^{-13}$ & $8.96\times10^{-14}$ \\
-    $10^{-2}$ & L-BFGS & 2.997 & 57 & $3.92\times10^{-13}$ & $6.91\times10^{-15}$ \\
-               & Structure-based QR & 3.272 & -- & $1.70\times10^{-14}$ & $1.17\times10^{-15}$ \\
-    $1$       & L-BFGS & 0.319 & 9 & $4.62\times10^{-15}$ & $5.17\times10^{-16}$ \\
-               & Structure-based QR & 3.273 & -- & $4.56\times10^{-15}$ & $5.72\times10^{-16}$ \\
+    $10^{-4}$ & L-BFGS & 1.949 & 37 & $2.69\times10^{-13}$ & $9.27\times10^{-15}$ \\
+               & Structure-based QR & 3.350 & -- & $2.67\times10^{-13}$ & $2.85\times10^{-14}$ \\
+    $10^{-2}$ & L-BFGS & 1.012 & 20 & $1.30\times10^{-14}$ & $1.07\times10^{-15}$ \\
+               & Structure-based QR & 3.285 & -- & $1.13\times10^{-14}$ & $2.89\times10^{-15}$ \\
+    $1$       & L-BFGS & 0.325 & 9 & $5.18\times10^{-15}$ & $7.25\times10^{-16}$ \\
+               & Structure-based QR & 3.277 & -- & $5.20\times10^{-15}$ & $5.81\times10^{-16}$ \\
     \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent At $\lambda=10^{-4}$, the restricted Hessian condition number
-is approximately $5\times10^7$. L-BFGS reaches its budget without satisfying
-the tolerance, while QR is about 33 times faster and gives a forward error
-almost eight orders of magnitude smaller. QR's relative gradient is still
-above $10^{-14}$, so its advantage should be stated in terms of the achieved
-metrics, rather than attributed to satisfying the L-BFGS stopping test.
-At $\lambda=10^{-2}$, L-BFGS converges in 57 iterations and the times are
-similar, with QR more accurate in the coefficients. At $\lambda=1$, both
-reach errors of order $10^{-15}$ and L-BFGS is faster again. The weakest
-regularization in this synthetic test is the only L-BFGS configuration in
-the recorded experiments that misses its requested tolerance.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{Chapters/images/img_04_comparison_section_11.png}
+    \caption{Runtime, coefficient error, and relative gradient for the
+    prescribed difficult spectrum (notebook Section 11).}
+    \label{fig:comparison_stress}
+\end{figure}
+
+\section{Reusing a Factorization for Multiple Right-Hand Sides}
+\label{sec:comparison_multiple_rhs}
+
+\noindent When $X$ and $\lambda$ remain fixed, QR can reuse $R$ and the
+stored reflectors: each additional response requires only applying $Q^T$
+and solving the triangular system. The notebook measures factorization,
+a solve with reused factors, and a fresh L-BFGS run separately on one
+deterministic response vector. It then projects the cost for $N$
+right-hand sides (labelled $k$ in the figure) using
+\begin{equation}
+\label{eq:comparison_multiple_rhs}
+    T_{\mathrm{QR}}(N)=t_{\mathrm{fact}}+N\,t_{\mathrm{solve}},
+    \qquad
+    T_{\mathrm{L\text{-}BFGS}}(N)=N\,t_{\mathrm{L\text{-}BFGS}}.
+\end{equation}
+These curves extrapolate the measured per-phase medians; they are not
+end-to-end timings of batches of different response vectors. The L-BFGS
+model assumes a fresh zero start and comparable work for each response,
+without warm starts or reuse of curvature information.
+
+\noindent The left panel of Figure~\ref{fig:comparison_multiple_rhs}
+shows no timing crossover for this implementation. Factorization takes
+$9.230$ ms, a solve with reused QR factors takes $2.093$ ms, and L-BFGS
+takes $0.508$ ms. Since $t_{\mathrm{solve}}>t_{\mathrm{L\text{-}BFGS}}$,
+the QR line has both a positive setup cost and a larger slope. Reuse alone
+therefore cannot make it cheaper under this timing model. The reused QR
+solution still agrees with the SVD reference to $3.35\times10^{-15}$,
+so the comparison is not caused by a loss of accuracy.
+
+\noindent The right panel reaches a different conclusion in operation
+counts. The model gives $6{,}539{,}000$ flops for factorization,
+$295{,}500$ per QR solve, and $882{,}000$ per L-BFGS solve for the observed
+history. The break-even value is
+\begin{equation}
+\label{eq:comparison_rhs_flops}
+    N^*_{\mathrm{flops}}
+    =\frac{6{,}539{,}000}{882{,}000-295{,}500}
+    \approx11.1,
+\end{equation}
+so QR has the smaller modeled operation count from 12 right-hand sides
+onwards. This advantage in arithmetic work does not translate into elapsed
+time here: reflector application and back substitution retain Python loops,
+whereas the L-BFGS matrix--vector operations use compiled numerical kernels.
+The discrepancy illustrates why factorization reuse, flop counts, and
+measured runtime must be considered separately.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{Chapters/images/img_04_comparison_section_12.png}
+    \caption{Projected total runtime from measured phase medians and modeled
+    flop counts for multiple right-hand sides (notebook Section 12).}
+    \label{fig:comparison_multiple_rhs}
+\end{figure}
 
 \section{Conclusions}
 \label{sec:comparison_conclusions}
 
 \begin{itemize}
-    \item \textbf{For the tested ML-CUP25 problems}, L-BFGS combines
-    coefficient accuracy near working precision with shorter runtimes and
-    substantially smaller principal storage requirements.
-    \item \textbf{As the spectral dimension increases}, fixed L-BFGS memory
-    requires more iterations, reducing its runtime advantage even at
-    controlled conditioning.
-    \item \textbf{For the difficult weakly regularized synthetic problem},
-    structure-based QR is faster and more accurate than the budget-limited
-    L-BFGS run. On the real-data small-$\lambda$ sweep, the accuracy ranking
-    reverses.
+    \item \textbf{Small effective rank and increasing $m$.} L-BFGS is faster
+    than the project QR solver while retaining comparable forward accuracy;
+    its pair storage grows linearly with $m$. The thin-SVD library baseline
+    is faster still on the tested tall, narrow matrices.
+    \item \textbf{Increasing $n$.} Even with memory scaled to $n$, L-BFGS
+    requires more iterations and loses its large timing advantage. QR has
+    a slightly lower median from $n=200$ in this run and smaller forward
+    errors over the larger-$n$ cases.
+    \item \textbf{Conditioning and memory.} L-BFGS retains near-working-precision
+    coefficient accuracy at small $\lambda$ on ML-CUP25, where structured QR
+    loses forward accuracy despite a small gradient. With memory 24,
+    L-BFGS also converges on every prescribed stress-test problem and remains
+    faster, with forward errors comparable to QR.
+    \item \textbf{Repeated right-hand sides.} Reusing QR factors reduces the
+    modeled arithmetic cost enough to overtake fresh L-BFGS solves from
+    12 responses, but the measured per-response times produce no crossover
+    for the present Python implementations.
 \end{itemize}
-\noindent The preferred solver therefore depends on the spectrum,
-regularization, required accuracy, and available storage. These experiments
-support a conditional choice between the two implementations, rather than
-a uniform ranking of direct and iterative methods.
+\noindent The choice between the two methods depends on the spectral
+dimension, regularization, memory, and workload. The observed rankings
+apply to these implementations and sampled problems; neither the ambient
+dimension nor the full condition number alone determines the preferred
+solver.
